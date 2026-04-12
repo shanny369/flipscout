@@ -565,6 +565,7 @@ Use real web search data. If you can't find sold data, use null. Be honest.` }]
       });
 
       const data = await res.json();
+      if (!data.content) throw new Error(data.error?.message || JSON.stringify(data));
       const fullText = data.content.filter(b => b.type === "text").map(b => b.text).join("\n");
       const parsed = parseResearch(fullText);
       if (!parsed) throw new Error("Couldn't parse research data. Try a more specific description.");
