@@ -496,7 +496,7 @@ function FlipScout() {
       let itemDescription = description;
       if (inputTab === "photo" && imageData) {
         setLoadingStep("🔍 Identifying item from photo...");
-        const r = await fetch("https://api.anthropic.com/v1/messages", {
+        const r = await fetch("/api/claude", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1000, messages: [{ role: "user", content: [
             { type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageData } },
@@ -513,7 +513,7 @@ function FlipScout() {
       await new Promise(r => setTimeout(r, 500));
       setLoadingStep("📊 Analyzing profit potential...");
 
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/claude", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: ANTHROPIC_MODEL, max_tokens: 1000,
