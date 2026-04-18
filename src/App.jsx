@@ -306,7 +306,7 @@ const STYLES = `
   .empty-text { font-size: 13px; line-height: 1.6; }
 
   /* MAP */
-  .map-outer { flex: 1; position: relative; overflow: hidden; min-height: 0; display: flex; flex-direction: column; }
+  .map-outer { flex: 1; position: relative; overflow: hidden; min-height: 0; display: flex; flex-direction: column; padding-bottom: 90px; }
   .map-inner { flex: 1; min-height: 0; }
   .map-legend { position: absolute; top: 12px; left: 12px; z-index: 100; background: rgba(10,10,14,0.92); border: 1px solid #2a2a3a; border-radius: 10px; padding: 8px 12px; backdrop-filter: blur(10px); display: flex; flex-direction: column; gap: 5px; }
   .legend-row { display: flex; align-items: center; gap: 7px; font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.6); }
