@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 // SUPABASE — replace YOUR_SUPABASE_ANON_KEY with your actual key
 // ═══════════════════════════════════════════════════════════════════════════════
 const SUPABASE_URL = "https://wiwftjtaclrwdxgcrffk.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indpd2Z0anRhY2xyd2R4Z2NyZmZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MjIyNTYsImV4cCI6MjA5MDI5ODI1Nn0.EKQL7I62SCPnOPcOI__0yeFDgruPuDbu3xEl_138iZU";;
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indpd2Z0anRhY2xyd2R4Z2NyZmZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MjIyNTYsImV4cCI6MjA5MDI5ODI1Nn0.EKQL7I62SCPnOPcOI__0yeFDgruPuDbu3xEl_138iZU";
 
 // Run this SQL once in Supabase:
 // create table if not exists hunt_stops (
@@ -487,19 +487,23 @@ export default function App() {
     dayStatus = { type: "ahead", msg: "All stops done! 🎉" };
   }
 
-  // Map bounds
+  // Map bounds — 0.015 degrees (~1 mile) padding so neighborhood houses show up
   const allGeo = [...stops, ...mapPins].filter(s => s.lat && s.lng);
   const allLats = [...allGeo.map(s => s.lat), userPos?.lat].filter(Boolean);
   const allLngs = [...allGeo.map(s => s.lng), userPos?.lng].filter(Boolean);
-  const pad = 0.003;
+  const pad = 0.015;
   const bounds = allLats.length ? {
     minLat: Math.min(...allLats)-pad, maxLat: Math.max(...allLats)+pad,
     minLng: Math.min(...allLngs)-pad, maxLng: Math.max(...allLngs)+pad,
   } : null;
 
+  const fallbackSrc = userPos
+    ? `https://www.openstreetmap.org/export/embed.html?bbox=${userPos.lng-pad},${userPos.lat-pad},${userPos.lng+pad},${userPos.lat+pad}&layer=mapnik`
+    : `https://www.openstreetmap.org/export/embed.html?bbox=-86.85,33.35,-86.65,33.55&layer=mapnik`;
+
   const mapSrc = bounds
     ? `https://www.openstreetmap.org/export/embed.html?bbox=${bounds.minLng},${bounds.minLat},${bounds.maxLng},${bounds.maxLat}&layer=mapnik`
-    : `https://www.openstreetmap.org/export/embed.html?bbox=-86.85,33.35,-86.65,33.55&layer=mapnik`;
+    : fallbackSrc;
 
   const total   = stops.length;
   const visited = stops.filter(s => s.status==="visited").length;
