@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -265,7 +266,7 @@ const STYLES = `
   .map-clear-btn { position: absolute; top: 12px; right: 12px; z-index: 100; background: rgba(10,10,14,0.92); border: 1px solid #2a2a3a; border-radius: 8px; padding: 7px 12px; color: rgba(255,255,255,0.4); font-family: 'DM Mono', monospace; font-size: 10px; cursor: pointer; backdrop-filter: blur(10px); transition: all 0.15s; }
   .map-clear-btn:hover { color: var(--red); border-color: var(--red); }
 
-  .gps-pill { position: absolute; bottom: 106px; right: 12px; z-index: 100; background: rgba(10,10,14,0.92); border: 1px solid #2a2a3a; border-radius: 20px; padding: 5px 12px; font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.4); backdrop-filter: blur(10px); display: flex; align-items: center; gap: 6px; }
+  .gps-pill { position: absolute; bottom: 120px; right: 12px; z-index: 100; background: rgba(10,10,14,0.92); border: 1px solid #2a2a3a; border-radius: 20px; padding: 5px 12px; font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.4); backdrop-filter: blur(10px); display: flex; align-items: center; gap: 6px; }
   .gps-dot { width: 6px; height: 6px; border-radius: 50%; background: #6b7280; }
   .gps-dot.on { background: #22c55e; animation: gpsPulse 1.6s ease-in-out infinite; }
   @keyframes gpsPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
@@ -277,7 +278,7 @@ const STYLES = `
   .mark-label { font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 600; color: #0c0c10; letter-spacing: 1px; }
   .mark-hint { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.4); background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 20px; backdrop-filter: blur(8px); }
 
-  .map-strip { position: absolute; bottom: 0; left: 0; right: 0; z-index: 100; background: rgba(10,10,14,0.96); border-top: 1px solid #2a2a3a; padding: 10px 12px 20px; backdrop-filter: blur(12px); }
+  .map-strip { position: absolute; bottom: 0; left: 0; right: 0; z-index: 100; background: rgba(10,10,14,0.96); border-top: 1px solid #2a2a3a; padding: 10px 12px 16px; backdrop-filter: blur(12px); }
   .map-strip-label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--muted); letter-spacing: 1.5px; margin-bottom: 8px; }
   .map-strip-list { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 2px; }
   .strip-stop { flex-shrink: 0; min-width: 110px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 7px 10px; cursor: pointer; transition: border-color 0.15s; }
@@ -384,6 +385,13 @@ function LeafletMap({ userPos, gpsReady, stops, mapPins, nowMins, onMarkClick, o
     }
   }, [userPos]);
 
+  // Force map to recalculate size when it becomes visible
+  useEffect(() => {
+    if (leafletRef.current) {
+      setTimeout(() => leafletRef.current.invalidateSize(), 100);
+    }
+  });
+
   // Update stop + pin markers
   useEffect(() => {
     const L = window.L;
@@ -425,7 +433,7 @@ function LeafletMap({ userPos, gpsReady, stops, mapPins, nowMins, onMarkClick, o
       marker.on("click", () => onPinClick(pin));
       markersRef.current.push(marker);
     });
-  }, [stops, mapPins]);
+  }, [stops, mapPins, onStopClick, onPinClick]);
 
   return (
     <div style={{ flex:1, position:"relative", overflow:"hidden", minHeight:0, display:"flex", flexDirection:"column" }}>
