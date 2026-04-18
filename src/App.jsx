@@ -317,13 +317,13 @@ const STYLES = `
   .gps-dot { width: 6px; height: 6px; border-radius: 50%; background: #6b7280; }
   .gps-dot.on { background: #22c55e; animation: gpsPulse 1.6s ease-in-out infinite; }
   @keyframes gpsPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-  .mark-wrap { position: absolute; bottom: 160px; left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+  .mark-wrap { display: none; }
   .mark-btn { width: 68px; height: 68px; border-radius: 50%; background: var(--accent); border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; box-shadow: 0 6px 24px rgba(245,158,11,0.5); transition: transform 0.1s; }
   .mark-btn:active { transform: scale(0.92); }
   .mark-icon { font-size: 22px; line-height: 1; }
   .mark-label { font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 600; color: #0c0c10; letter-spacing: 1px; }
   .mark-hint { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.4); background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 20px; backdrop-filter: blur(8px); }
-  .map-strip { position: absolute; bottom: 0; left: 0; right: 0; z-index: 100; background: rgba(10,10,14,0.96); border-top: 1px solid #2a2a3a; padding: 8px 10px 16px; backdrop-filter: blur(12px); }
+  .map-strip { position: absolute; bottom: 0; left: 0; right: 0; z-index: 100; background: rgba(10,10,14,0.96); border-top: 1px solid #2a2a3a; padding: 8px 10px 16px; backdrop-filter: blur(12px); height: 110px; }
   .map-strip-label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--muted); letter-spacing: 1.5px; margin-bottom: 7px; }
   .map-strip-list { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
   .strip-stop { flex-shrink: 0; min-width: 100px; max-width: 130px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 7px 9px; cursor: pointer; transition: border-color 0.15s; overflow: hidden; }
@@ -492,7 +492,7 @@ function LeafletMap({ userPos, gpsReady, stops, mapPins, nowMins, onMarkClick, o
       {mapPins.length > 0 && <button className="map-clear-btn" onClick={onClearPins}>Clear pins</button>}
       <div className="gps-pill"><div className={`gps-dot ${gpsReady?"on":""}`}/>{gpsReady?"GPS ready":"No GPS"}</div>
 
-      <div className="mark-wrap" style={{ bottom: stops.length > 0 ? 160 : 30 }}>
+      <div className="mark-wrap" style={{ bottom: 170, position: "absolute", left: "50%", transform: "translateX(-50%)", zIndex: 300, display: "flex", flexDirection: "column", alignItems: "center", gap: 7 }}>
         <button className="mark-btn" onClick={onMarkClick}>
           <span className="mark-icon">📍</span>
           <span className="mark-label">MARK</span>
