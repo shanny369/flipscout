@@ -1,32 +1,101 @@
-import React, { useState, useRef, useCallback, useEffect } from "react";
-
-const ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SALEMAP HELPERS
+// SUPABASE — replace YOUR_SUPABASE_ANON_KEY with your actual key
 // ═══════════════════════════════════════════════════════════════════════════════
+const SUPABASE_URL = "https://wiwftjtaclrwdxgcrffk.supabase.co";
+const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
 
-const MAP_STATUS = {
-  visited: { label: "Visited",  color: "#22c55e", emoji: "✅" },
-  skip:    { label: "Skip",     color: "#6b7280", emoji: "⏭"  },
-  return:  { label: "Go Back!", color: "#f43f5e", emoji: "🔁" },
+// Run this SQL once in Supabase:
+// create table if not exists hunt_stops (
+//   id uuid primary key default gen_random_uuid(),
+//   session_date text not null,
+//   name text not null,
+//   address text not null,
+//   lat numeric, lng numeric,
+//   type text default 'garage',
+//   notes text default '',
+//   status text default 'pending',
+//   est_minutes integer default 20,
+//   open_time text default null,
+//   close_time text default null,
+//   sort_order integer default 0,
+//   created_at timestamptz default now()
+// );
+
+async function sbFetch(path, opts = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+      ...opts.headers,
+    },
+    ...opts,
+  });
+  const text = await res.text();
+  return text ? JSON.parse(text) : [];
+}
+
+async function geocode(address) {
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`);
+    const d = await r.json();
+    if (d[0]) return { lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) };
+  } catch {}
+  return null;
+}
+
+function getTodayKey() { return new Date().toISOString().slice(0, 10); }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════════════
+const STOP_TYPES = {
+  estate:    { label: "Estate Sale",    emoji: "🏛",  color: "#a78bfa" },
+  garage:    { label: "Garage Sale",    emoji: "🏠",  color: "#f59e0b" },
+  yard:      { label: "Yard Sale",      emoji: "🌿",  color: "#34d399" },
+  community: { label: "Community Sale", emoji: "🏘",  color: "#60a5fa" },
+  lunch:     { label: "Lunch Break",    emoji: "🍔",  color: "#f87171" },
 };
 
-function getSaturdayKey() {
-  const d = new Date();
-  const day = d.getDay();
-  const diff = day === 6 ? 0 : day + 1;
-  const sat = new Date(d);
-  sat.setDate(d.getDate() - diff);
-  return `salemap_${sat.toISOString().slice(0, 10)}`;
+const STOP_STATUS = {
+  pending: { label: "Not Yet", color: "#f59e0b", emoji: "📍" },
+  visited: { label: "Visited", color: "#22c55e", emoji: "✅" },
+  skip:    { label: "Skip",    color: "#6b7280", emoji: "⏭"  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TIME HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+function timeToMins(t) {
+  if (!t) return 0;
+  const [h, m] = t.split(":").map(Number);
+  return h * 60 + m;
 }
 
-function loadPins() {
-  try { return JSON.parse(localStorage.getItem(getSaturdayKey()) || "[]"); }
-  catch { return []; }
+function minsToTime(m) {
+  const h = Math.floor(m / 60) % 24;
+  const min = m % 60;
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hh = h % 12 || 12;
+  return `${hh}:${min.toString().padStart(2, "0")} ${ampm}`;
 }
-function savePins(pins) {
-  try { localStorage.setItem(getSaturdayKey(), JSON.stringify(pins)); } catch {}
+
+function buildSchedule(stops, startTime, defaultMins) {
+  let cursor = timeToMins(startTime) || timeToMins("08:00");
+  return stops.map((stop, i) => {
+    const arriveAt = cursor;
+    const dur = stop.est_minutes || defaultMins || 20;
+    cursor += dur + (i < stops.length - 1 ? 5 : 0);
+    return { ...stop, arriveAt, leaveAt: arriveAt + dur };
+  });
+}
+
+function getNowMins() {
+  const n = new Date();
+  return n.getHours() * 60 + n.getMinutes();
 }
 
 function projectPin(lat, lng, bounds, w, h) {
@@ -36,699 +105,289 @@ function projectPin(lat, lng, bounds, w, h) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FLIPSCOUT HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function parseResearch(raw) {
-  try {
-    const clean = raw.replace(/```json|```/g, "").trim();
-    const start = clean.indexOf("{");
-    const end = clean.lastIndexOf("}");
-    return JSON.parse(clean.slice(start, end + 1));
-  } catch { return null; }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
 // ═══════════════════════════════════════════════════════════════════════════════
-
 const STYLES = `
-  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&family=Syne:wght@700;800&family=Inconsolata:wght@400;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500;600&display=swap');
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { height: 100%; background: #0c0c10; }
+  body { font-family: 'DM Sans', sans-serif; color: #e8e8f0; -webkit-tap-highlight-color: transparent; }
 
   :root {
-    --bg: #0a0a0f;
-    --surface: #12121a;
-    --surface2: #1a1a26;
-    --border: #2a2a3d;
-    --accent: #00e5a0;
-    --text: #e8e8f0;
-    --muted: #7070a0;
-    --ebay-green: #00c853;
-    --amazon-orange: #ff9900;
-    --danger: #ff4560;
-    --warn: #ffd600;
+    --bg: #0c0c10; --surface: #13131a; --surface2: #1a1a24; --border: #252535;
+    --accent: #f59e0b; --text: #e8e8f0; --muted: #60607a; --green: #22c55e; --red: #f43f5e;
   }
 
-  html, body, #root {
-    height: 100%;
-    background: var(--bg);
-  }
+  .shell { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; max-width: 520px; margin: 0 auto; }
 
-  body {
-    font-family: 'DM Sans', sans-serif;
-    color: var(--text);
-    -webkit-tap-highlight-color: transparent;
-  }
+  .app-header { background: var(--bg); border-bottom: 1px solid var(--border); padding: 13px 18px 11px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  .app-logo { font-family: 'Bebas Neue', sans-serif; font-size: 24px; letter-spacing: 3px; line-height: 1; color: var(--text); }
+  .app-logo span { color: var(--accent); }
+  .header-right { display: flex; align-items: center; gap: 10px; }
+  .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; flex-shrink: 0; }
+  .sync-dot.live { background: #22c55e; animation: syncPulse 2s ease-in-out infinite; }
+  @keyframes syncPulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .date-badge { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); }
 
-  /* ── SHELL ── */
-  .shell {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    height: 100dvh;
-    overflow: hidden;
-  }
-
-  /* ── BOTTOM NAV ── */
-  .bottom-nav {
-    display: flex;
-    background: #0d0d14;
-    border-top: 1px solid var(--border);
-    flex-shrink: 0;
-    z-index: 300;
-  }
-
-  .nav-btn {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 10px 0 14px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--muted);
-    transition: color 0.15s;
-    -webkit-tap-highlight-color: transparent;
-  }
-
+  .bottom-nav { display: flex; background: #0a0a0e; border-top: 1px solid var(--border); flex-shrink: 0; z-index: 200; }
+  .nav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 10px 0 16px; background: none; border: none; cursor: pointer; color: var(--muted); transition: color 0.15s; }
   .nav-btn.active { color: var(--accent); }
-  .nav-btn.active.map-tab { color: #f59e0b; }
-
-  .nav-icon { font-size: 22px; line-height: 1; }
+  .nav-btn.map-active { color: #60a5fa; }
+  .nav-icon { font-size: 20px; line-height: 1; }
   .nav-label { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 1px; }
 
-  .nav-btn.active .nav-label { color: inherit; }
+  .page { flex: 1; overflow-y: auto; min-height: 0; }
+  .page.map-page { overflow: hidden; display: flex; flex-direction: column; }
+  .plan-wrap { padding: 14px 14px 80px; display: flex; flex-direction: column; gap: 12px; }
 
-  /* ── PAGE CONTAINERS ── */
-  .page { flex: 1; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
-  .page.scout { overflow-y: auto; }
-  .page.map   { overflow: hidden; }
+  /* STATS */
+  .stats-row { display: flex; gap: 8px; }
+  .stat-chip { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 6px; text-align: center; }
+  .stat-num { font-family: 'Bebas Neue', sans-serif; font-size: 26px; line-height: 1; color: var(--text); }
+  .stat-num.amber { color: var(--accent); }
+  .stat-num.green { color: var(--green); }
+  .stat-num.gray  { color: #6b7280; }
+  .stat-lbl { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--muted); letter-spacing: 1px; margin-top: 2px; }
 
-  /* ══════════════════════════════════════════
-     FLIPSCOUT STYLES
-  ══════════════════════════════════════════ */
+  /* SCHEDULE CARD */
+  .section-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+  .section-label { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 2px; color: var(--muted); margin-bottom: 12px; }
+  .settings-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .settings-field { flex: 1; min-width: 90px; }
+  .field-label { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted); letter-spacing: 0.5px; margin-bottom: 4px; }
+  .field-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px; outline: none; transition: border-color 0.2s; }
+  .field-input:focus { border-color: var(--accent); }
+  .mins-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .mins-chip { padding: 5px 11px; border-radius: 20px; border: 1px solid var(--border); background: none; color: var(--muted); font-family: 'DM Mono', monospace; font-size: 11px; cursor: pointer; transition: all 0.15s; }
+  .mins-chip.active { background: var(--accent); color: #0c0c10; border-color: var(--accent); font-weight: 600; }
 
-  .scout-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 20px 24px 16px;
-    border-bottom: 1px solid var(--border);
-    background: rgba(10,10,15,0.9);
-    backdrop-filter: blur(12px);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    flex-shrink: 0;
-  }
+  /* DAY STATUS */
+  .day-status { display: flex; align-items: center; gap: 8px; padding: 9px 13px; border-radius: 9px; font-family: 'DM Mono', monospace; font-size: 11px; margin-top: 10px; letter-spacing: 0.3px; }
+  .day-status.ahead   { background: rgba(34,197,94,0.1);  color: var(--green); border: 1px solid rgba(34,197,94,0.2); }
+  .day-status.behind  { background: rgba(244,63,94,0.1);  color: var(--red);   border: 1px solid rgba(244,63,94,0.2); }
+  .day-status.ontrack { background: rgba(245,158,11,0.1); color: var(--accent);border: 1px solid rgba(245,158,11,0.2); }
 
-  .logo { display: flex; align-items: baseline; gap: 2px; }
-  .logo-flip { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 2px; color: var(--accent); line-height: 1; }
-  .logo-scout { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 2px; color: var(--text); line-height: 1; }
-  .logo-tag { font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; letter-spacing: 1px; margin-left: 8px; }
+  /* TIMELINE */
+  .timeline { display: flex; flex-direction: column; margin-top: 14px; }
+  .tl-row { display: flex; align-items: flex-start; position: relative; }
+  .tl-time { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); text-align: right; padding-right: 10px; width: 54px; flex-shrink: 0; padding-top: 1px; line-height: 1.4; }
+  .tl-time.now { color: var(--accent); font-weight: 600; }
+  .tl-spine { width: 22px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; position: relative; }
+  .tl-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 2px; z-index: 1; flex-shrink: 0; }
+  .tl-line { position: absolute; top: 12px; bottom: -4px; width: 2px; background: var(--border); }
+  .tl-content { flex: 1; padding-bottom: 14px; padding-left: 4px; }
+  .tl-name { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.3; }
+  .tl-name.is-now { color: var(--accent); }
+  .tl-meta { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .tl-warn { color: var(--red); }
+  .tl-end { display: flex; align-items: center; gap: 0; padding-top: 2px; }
+  .tl-end-time { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); text-align: right; padding-right: 10px; width: 54px; flex-shrink: 0; }
+  .tl-end-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border); border: 2px solid #3a3a4a; flex-shrink: 0; margin-left: 6px; }
+  .tl-end-label { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted); padding-left: 8px; }
 
-  .header-pills { display: flex; gap: 8px; }
-  .pill { font-size: 10px; font-family: 'DM Mono', monospace; padding: 3px 9px; border-radius: 20px; letter-spacing: 0.5px; }
-  .pill-ebay { background: rgba(0,200,83,0.15); color: var(--ebay-green); border: 1px solid rgba(0,200,83,0.3); }
-  .pill-amazon { background: rgba(255,153,0,0.15); color: var(--amazon-orange); border: 1px solid rgba(255,153,0,0.3); }
+  /* ADD STOP */
+  .add-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+  .type-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .type-chip { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: none; font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted); cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .type-chip.active { color: #0c0c10; border-color: transparent; font-weight: 600; }
+  .add-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 9px; padding: 10px 13px; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 13px; outline: none; transition: border-color 0.2s; margin-bottom: 7px; }
+  .add-input:focus { border-color: var(--accent); }
+  .add-input::placeholder { color: var(--muted); }
+  .hours-row { display: flex; gap: 8px; margin-bottom: 7px; }
+  .hours-field { flex: 1; }
+  .add-actions { display: flex; gap: 8px; }
+  .add-btn { flex: 1; padding: 11px; background: var(--accent); color: #0c0c10; border: none; border-radius: 9px; font-family: 'Bebas Neue', sans-serif; font-size: 16px; letter-spacing: 2px; cursor: pointer; transition: all 0.15s; }
+  .add-btn:hover:not(:disabled) { background: #fbbf24; }
+  .add-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .paste-btn { padding: 11px 14px; background: none; border: 1px solid var(--border); border-radius: 9px; color: var(--muted); font-family: 'DM Mono', monospace; font-size: 11px; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+  .paste-btn:hover { color: var(--text); border-color: var(--text); }
 
-  .scout-main { max-width: 860px; margin: 0 auto; padding: 32px 20px 40px; width: 100%; }
+  /* STOPS LIST */
+  .stops-header { display: flex; align-items: center; justify-content: space-between; padding: 0 2px; }
+  .stops-header-label { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 2px; color: var(--muted); }
+  .clear-all-btn { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted); background: none; border: none; cursor: pointer; letter-spacing: 0.5px; transition: color 0.15s; padding: 0; }
+  .clear-all-btn:hover { color: var(--red); }
 
-  .input-card { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; overflow: hidden; margin-bottom: 28px; }
+  .stop-card { background: var(--surface); border: 1px solid var(--border); border-radius: 13px; overflow: hidden; transition: border-color 0.15s; }
+  .stop-card.visited { border-color: rgba(34,197,94,0.35); }
+  .stop-card.skip    { opacity: 0.55; }
+  .stop-main { padding: 12px 13px; display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+  .stop-emoji { font-size: 22px; flex-shrink: 0; line-height: 1.1; }
+  .stop-info { flex: 1; min-width: 0; }
+  .stop-name { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stop-addr { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .stop-pills { display: flex; align-items: center; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
+  .pill { font-family: 'DM Mono', monospace; font-size: 10px; padding: 2px 8px; border-radius: 5px; }
+  .pill-time   { color: var(--accent); background: rgba(245,158,11,0.12); }
+  .pill-status { }
+  .pill-hours  { color: #60a5fa; background: rgba(96,165,250,0.1); }
+  .pill-warn   { color: var(--red); background: rgba(244,63,94,0.1); }
+  .pill-note   { color: var(--muted); font-style: italic; font-family: 'DM Sans', sans-serif; }
+  .stop-chevron { color: var(--muted); font-size: 16px; transition: transform 0.2s; flex-shrink: 0; margin-top: 3px; }
+  .stop-chevron.open { transform: rotate(90deg); }
 
-  .input-tab-bar { display: flex; border-bottom: 1px solid var(--border); }
+  .stop-expanded { border-top: 1px solid var(--border); padding: 12px 13px; background: rgba(0,0,0,0.25); display: flex; flex-direction: column; gap: 10px; }
+  .status-btns { display: flex; gap: 8px; }
+  .status-btn { flex: 1; padding: 10px 4px; border-radius: 10px; border: 1.5px solid; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; transition: all 0.12s; }
+  .status-btn:active { transform: scale(0.95); }
+  .status-btn-emoji { font-size: 20px; line-height: 1; }
+  .status-btn-label { font-family: 'DM Mono', monospace; font-size: 10px; }
 
-  .input-tab {
-    flex: 1; padding: 14px; background: none; border: none;
-    color: var(--muted); font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500;
-    cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
-    transition: all 0.2s; letter-spacing: 0.3px;
-  }
-  .input-tab.active { color: var(--accent); background: rgba(0,229,160,0.06); border-bottom: 2px solid var(--accent); margin-bottom: -1px; }
-  .input-tab:hover:not(.active) { color: var(--text); background: rgba(255,255,255,0.03); }
+  .expand-fields { display: flex; gap: 8px; flex-wrap: wrap; }
+  .expand-field { flex: 1; min-width: 80px; }
+  .stop-notes-input { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 13px; outline: none; resize: none; transition: border-color 0.2s; }
+  .stop-notes-input:focus { border-color: var(--accent); }
+  .stop-notes-input::placeholder { color: var(--muted); }
+  .stop-actions { display: flex; gap: 7px; }
+  .s-btn { flex: 1; padding: 8px 4px; border-radius: 8px; border: 1px solid var(--border); background: none; color: var(--muted); font-family: 'DM Mono', monospace; font-size: 10px; cursor: pointer; transition: all 0.15s; text-align: center; }
+  .s-btn:hover { color: var(--text); border-color: var(--text); }
+  .s-btn.danger:hover { color: var(--red); border-color: var(--red); }
+  .s-btn.nav-btn-s { background: rgba(96,165,250,0.1); color: #60a5fa; border-color: rgba(96,165,250,0.25); }
 
-  .input-body { padding: 20px; }
+  /* EMPTY */
+  .empty { text-align: center; padding: 40px 20px; color: var(--muted); }
+  .empty-icon { font-size: 44px; margin-bottom: 12px; display: block; }
+  .empty-text { font-size: 14px; line-height: 1.6; }
 
-  .drop-zone {
-    border: 2px dashed var(--border); border-radius: 16px; padding: 40px 20px;
-    text-align: center; cursor: pointer; transition: all 0.2s; position: relative; overflow: hidden;
-  }
-  .drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); background: rgba(0,229,160,0.04); }
-  .drop-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
-  .drop-icon { font-size: 40px; margin-bottom: 10px; display: block; }
-  .drop-label { font-size: 15px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
-  .drop-sub { font-size: 12px; color: var(--muted); }
-
-  .preview-img { width: 100%; max-height: 240px; object-fit: contain; border-radius: 12px; margin-bottom: 14px; }
-
-  .desc-textarea {
-    width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 12px;
-    padding: 14px; color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 14px;
-    line-height: 1.6; resize: none; transition: border-color 0.2s; outline: none;
-  }
-  .desc-textarea:focus { border-color: var(--accent); }
-  .desc-textarea::placeholder { color: var(--muted); }
-
-  .search-btn {
-    width: 100%; margin-top: 16px; padding: 15px; background: var(--accent); color: #0a0a0f;
-    border: none; border-radius: 12px; font-family: 'Bebas Neue', sans-serif; font-size: 19px;
-    letter-spacing: 3px; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
-  }
-  .search-btn:hover:not(:disabled) { background: #00f5b0; transform: translateY(-1px); box-shadow: 0 8px 24px rgba(0,229,160,0.3); }
-  .search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .loading-wrap { text-align: center; padding: 60px 24px; }
-  .spinner { width: 44px; height: 44px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 20px; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .loading-step { font-size: 13px; color: var(--muted); font-family: 'DM Mono', monospace; animation: fadeP 1.5s ease-in-out infinite; }
-  @keyframes fadeP { 0%,100%{opacity:0.4} 50%{opacity:1} }
-
-  .results { display: flex; flex-direction: column; gap: 18px; }
-
-  .item-banner { background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 20px 24px; }
-  .item-name { font-family: 'Bebas Neue', sans-serif; font-size: 26px; letter-spacing: 1.5px; color: var(--text); margin-bottom: 4px; }
-  .item-condition { font-size: 13px; color: var(--muted); font-family: 'DM Mono', monospace; }
-
-  .verdict-card { border-radius: 18px; padding: 20px 24px; display: flex; align-items: flex-start; gap: 16px; border: 1px solid; }
-  .verdict-buy  { background: rgba(0,200,83,0.08);  border-color: rgba(0,200,83,0.3); }
-  .verdict-maybe{ background: rgba(255,214,0,0.08); border-color: rgba(255,214,0,0.3); }
-  .verdict-pass { background: rgba(255,69,96,0.08); border-color: rgba(255,69,96,0.3); }
-  .verdict-icon { font-size: 36px; flex-shrink: 0; }
-  .verdict-label { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 2px; margin-bottom: 4px; }
-  .verdict-buy .verdict-label  { color: var(--ebay-green); }
-  .verdict-maybe .verdict-label{ color: var(--warn); }
-  .verdict-pass .verdict-label { color: var(--danger); }
-  .verdict-reason { font-size: 13px; color: var(--text); line-height: 1.6; }
-
-  .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
-  .metric-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
-  .metric-source { font-size: 10px; font-family: 'DM Mono', monospace; letter-spacing: 1px; margin-bottom: 6px; display: flex; align-items: center; gap: 5px; }
-  .metric-source.ebay { color: var(--ebay-green); }
-  .metric-source.amazon { color: var(--amazon-orange); }
-  .metric-value { font-family: 'Bebas Neue', sans-serif; font-size: 32px; letter-spacing: 1px; line-height: 1; margin-bottom: 3px; }
-  .metric-label { font-size: 11px; color: var(--muted); }
-  .metric-sub { font-size: 11px; color: var(--muted); margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); font-family: 'DM Mono', monospace; }
-
-  .section-title {
-    font-family: 'Bebas Neue', sans-serif; font-size: 17px; letter-spacing: 2px; color: var(--muted);
-    margin-bottom: 12px; display: flex; align-items: center; gap: 10px;
-  }
-  .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-
-  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; padding: 2px 8px; border-radius: 6px; font-family: 'DM Mono', monospace; }
-  .badge-count { background: rgba(0,229,160,0.12); color: var(--accent); border: 1px solid rgba(0,229,160,0.25); }
-
-  .sold-list { display: flex; flex-direction: column; gap: 7px; }
-  .sold-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; gap: 10px; }
-  .sold-title { font-size: 12px; color: var(--text); flex: 1; line-height: 1.4; }
-  .sold-price { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500; color: var(--ebay-green); white-space: nowrap; }
-  .sold-date { font-size: 10px; color: var(--muted); font-family: 'DM Mono', monospace; white-space: nowrap; }
-  .sold-condition { font-size: 10px; padding: 2px 7px; border-radius: 4px; background: rgba(0,200,83,0.12); color: var(--ebay-green); white-space: nowrap; }
-
-  /* PROFIT CALC */
-  .profit-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; }
-  .calc-input-row { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
-  .calc-field { flex: 1; min-width: 120px; }
-  .option-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; font-family: 'DM Mono', monospace; letter-spacing: 0.5px; }
-  .option-input {
-    background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
-    padding: 9px 12px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 13px;
-    outline: none; transition: border-color 0.2s; width: 100%;
-  }
-  .option-input:focus { border-color: var(--accent); }
-  .option-input::placeholder { color: var(--muted); }
-
-  .profit-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
-  .profit-row:last-child { border-bottom: none; }
-  .profit-row-label { color: var(--muted); }
-  .profit-row-value { font-family: 'DM Mono', monospace; font-weight: 500; }
-  .profit-positive { color: var(--ebay-green); }
-  .profit-negative { color: var(--danger); }
-  .profit-neutral  { color: var(--text); }
-  .profit-total { display: flex; justify-content: space-between; align-items: center; padding: 14px 0 0; margin-top: 6px; }
-  .profit-total-label { font-family: 'Bebas Neue', sans-serif; font-size: 18px; letter-spacing: 1.5px; }
-  .profit-total-value { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 1px; }
-
-  .error-card { background: rgba(255,69,96,0.08); border: 1px solid rgba(255,69,96,0.3); border-radius: 14px; padding: 20px; text-align: center; color: var(--danger); font-size: 13px; }
-
-  .reset-btn { background: none; border: 1px solid var(--border); border-radius: 10px; padding: 9px 18px; color: var(--muted); font-family: 'DM Sans', sans-serif; font-size: 12px; cursor: pointer; transition: all 0.2s; display: block; margin: 0 auto; }
-  .reset-btn:hover { color: var(--text); border-color: var(--text); }
-
-  /* ══════════════════════════════════════════
-     SALEMAP STYLES
-  ══════════════════════════════════════════ */
-
-  .map-header {
-    background: #0f0f0f;
-    padding: 14px 20px 12px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-    border-bottom: 1px solid #222;
-    z-index: 50;
-  }
-
-  .map-logo { display: flex; align-items: baseline; }
-  .map-logo-sale { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: #fff; letter-spacing: -0.5px; }
-  .map-logo-map  { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: #f59e0b; letter-spacing: -0.5px; }
-
-  .map-stats { display: flex; gap: 16px; }
-  .map-stat { display: flex; flex-direction: column; align-items: center; line-height: 1; }
-  .map-stat-num { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 800; color: #fff; }
-  .map-stat-num.green { color: #22c55e; }
-  .map-stat-num.gray  { color: #6b7280; }
-  .map-stat-num.red   { color: #f43f5e; }
-  .map-stat-label { font-family: 'Inconsolata', monospace; font-size: 9px; color: rgba(255,255,255,0.3); letter-spacing: 1px; margin-top: 2px; }
-
-  .map-container { flex: 1; position: relative; overflow: hidden; min-height: 0; }
+  /* MAP */
+  .map-wrap { flex: 1; position: relative; overflow: hidden; min-height: 0; }
   .map-iframe { width: 100%; height: 100%; border: none; display: block; }
+  .pin-svg { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
 
-  .pin-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+  .map-legend { position: absolute; top: 12px; left: 12px; z-index: 100; background: rgba(10,10,14,0.92); border: 1px solid #2a2a3a; border-radius: 10px; padding: 8px 12px; backdrop-filter: blur(10px); display: flex; flex-direction: column; gap: 5px; }
+  .legend-row { display: flex; align-items: center; gap: 7px; font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.6); }
+  .legend-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
-  .map-legend {
-    position: absolute; top: 14px; left: 14px; z-index: 100;
-    background: rgba(10,10,10,0.88); border: 1px solid #2a2a2a; border-radius: 12px;
-    padding: 10px 13px; backdrop-filter: blur(10px); display: flex; flex-direction: column; gap: 6px;
-  }
-  .legend-item { display: flex; align-items: center; gap: 7px; font-family: 'Inconsolata', monospace; font-size: 11px; color: rgba(255,255,255,0.65); letter-spacing: 0.3px; }
-  .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .map-clear-btn { position: absolute; top: 12px; right: 12px; z-index: 100; background: rgba(10,10,14,0.92); border: 1px solid #2a2a3a; border-radius: 8px; padding: 7px 12px; color: rgba(255,255,255,0.4); font-family: 'DM Mono', monospace; font-size: 10px; cursor: pointer; backdrop-filter: blur(10px); transition: all 0.15s; }
+  .map-clear-btn:hover { color: var(--red); border-color: var(--red); }
 
-  .map-clear-btn {
-    position: absolute; top: 14px; right: 14px; z-index: 100;
-    background: rgba(10,10,10,0.88); border: 1px solid #2a2a2a; border-radius: 10px;
-    padding: 8px 13px; color: rgba(255,255,255,0.4); font-family: 'Inconsolata', monospace;
-    font-size: 11px; letter-spacing: 0.5px; cursor: pointer; backdrop-filter: blur(10px); transition: all 0.15s;
-  }
-  .map-clear-btn:hover { color: #f43f5e; border-color: #f43f5e; }
-
-  .gps-badge {
-    position: absolute; bottom: 110px; right: 14px; z-index: 100;
-    background: rgba(10,10,10,0.88); border: 1px solid #2a2a2a; border-radius: 20px;
-    padding: 6px 13px; font-family: 'Inconsolata', monospace; font-size: 11px;
-    color: rgba(255,255,255,0.4); letter-spacing: 0.5px; backdrop-filter: blur(10px);
-    display: flex; align-items: center; gap: 7px;
-  }
-  .gps-dot { width: 7px; height: 7px; border-radius: 50%; background: #6b7280; }
+  .gps-pill { position: absolute; bottom: 106px; right: 12px; z-index: 100; background: rgba(10,10,14,0.92); border: 1px solid #2a2a3a; border-radius: 20px; padding: 5px 12px; font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.4); backdrop-filter: blur(10px); display: flex; align-items: center; gap: 6px; }
+  .gps-dot { width: 6px; height: 6px; border-radius: 50%; background: #6b7280; }
   .gps-dot.on { background: #22c55e; animation: gpsPulse 1.6s ease-in-out infinite; }
   @keyframes gpsPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
-  .mark-btn-wrap {
-    position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-    z-index: 100; display: flex; flex-direction: column; align-items: center; gap: 8px;
-  }
-  .mark-btn {
-    width: 78px; height: 78px; border-radius: 50%; background: #f59e0b; border: none; cursor: pointer;
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-    box-shadow: 0 8px 28px rgba(245,158,11,0.5), 0 2px 8px rgba(0,0,0,0.5); transition: transform 0.1s;
-  }
+  .mark-wrap { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 100; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+  .mark-btn { width: 70px; height: 70px; border-radius: 50%; background: var(--accent); border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; box-shadow: 0 6px 24px rgba(245,158,11,0.5); transition: transform 0.1s; }
   .mark-btn:active { transform: scale(0.92); }
-  .mark-btn-icon  { font-size: 26px; line-height: 1; }
-  .mark-btn-label { font-family: 'Inconsolata', monospace; font-size: 10px; font-weight: 600; color: #0f0f0f; letter-spacing: 1px; }
-  .mark-hint { font-family: 'Inconsolata', monospace; font-size: 11px; color: rgba(255,255,255,0.45); background: rgba(0,0,0,0.6); padding: 5px 14px; border-radius: 20px; backdrop-filter: blur(8px); }
+  .mark-icon { font-size: 24px; line-height: 1; }
+  .mark-label { font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 600; color: #0c0c10; letter-spacing: 1px; }
+  .mark-hint { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.4); background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 20px; backdrop-filter: blur(8px); }
+
+  .map-strip { position: absolute; bottom: 0; left: 0; right: 0; z-index: 100; background: rgba(10,10,14,0.96); border-top: 1px solid #2a2a3a; padding: 10px 12px 20px; backdrop-filter: blur(12px); }
+  .map-strip-label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--muted); letter-spacing: 1.5px; margin-bottom: 8px; }
+  .map-strip-list { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 2px; }
+  .strip-stop { flex-shrink: 0; min-width: 110px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 7px 10px; cursor: pointer; transition: border-color 0.15s; }
+  .strip-stop.is-now { border-color: var(--accent); }
+  .strip-stop.is-done { opacity: 0.45; }
+  .strip-name { font-size: 11px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px; }
+  .strip-meta { display: flex; align-items: center; justify-content: space-between; }
+  .strip-time { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--accent); }
 
   /* SHEETS */
-  .map-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 400; display: flex; align-items: flex-end; }
-  .map-sheet { width: 100%; background: #181818; border-radius: 22px 22px 0 0; padding: 14px 22px 50px; animation: sheetUp 0.22s cubic-bezier(0.34,1.3,0.64,1); }
+  .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.72); z-index: 500; display: flex; align-items: flex-end; }
+  .sheet { width: 100%; background: #161620; border-radius: 20px 20px 0 0; padding: 14px 20px 50px; animation: sheetUp 0.2s cubic-bezier(0.34,1.3,0.64,1); }
   @keyframes sheetUp { from{transform:translateY(100%);opacity:0} to{transform:translateY(0);opacity:1} }
-  .sheet-handle { width: 38px; height: 4px; background: #333; border-radius: 2px; margin: 0 auto 18px; }
-  .sheet-title { font-family: 'Inconsolata', monospace; font-size: 12px; color: rgba(255,255,255,0.35); letter-spacing: 2px; text-align: center; margin-bottom: 16px; }
-  .status-row { display: flex; gap: 12px; }
-  .status-btn { flex: 1; padding: 16px 6px; border-radius: 14px; border: 2px solid; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 7px; transition: transform 0.1s; }
-  .status-btn:active { transform: scale(0.94); }
-  .status-emoji { font-size: 26px; line-height: 1; }
-  .status-label { font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 700; }
-  .del-btn { width: 100%; margin-top: 12px; padding: 13px; background: none; border: 1.5px solid #2a2a2a; border-radius: 12px; color: #555; font-family: 'Inconsolata', monospace; font-size: 13px; letter-spacing: 0.5px; cursor: pointer; transition: all 0.15s; }
-  .del-btn:hover { border-color: #f43f5e; color: #f43f5e; }
+  .sheet-handle { width: 36px; height: 4px; background: #2a2a3a; border-radius: 2px; margin: 0 auto 16px; }
+  .sheet-title { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); letter-spacing: 2px; text-align: center; margin-bottom: 16px; }
+  .sheet-status-row { display: flex; gap: 10px; }
+  .sh-status-btn { flex: 1; padding: 14px 4px; border-radius: 12px; border: 2px solid; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: transform 0.1s; }
+  .sh-status-btn:active { transform: scale(0.94); }
+  .sh-status-emoji { font-size: 26px; line-height: 1; }
+  .sh-status-label { font-family: 'DM Mono', monospace; font-size: 10px; }
+  .sh-del-btn { width: 100%; margin-top: 12px; padding: 12px; background: none; border: 1px solid #2a2a3a; border-radius: 10px; color: #555; font-family: 'DM Mono', monospace; font-size: 12px; cursor: pointer; transition: all 0.15s; }
+  .sh-del-btn:hover { border-color: var(--red); color: var(--red); }
 
-  .no-gps-title { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 800; color: #fff; margin-bottom: 8px; }
-  .no-gps-sub { font-family: 'Inconsolata', monospace; font-size: 13px; color: rgba(255,255,255,0.4); line-height: 1.6; margin-bottom: 16px; }
-  .addr-input { width: 100%; background: #111; border: 1.5px solid #2a2a2a; border-radius: 12px; padding: 13px 14px; color: #fff; font-family: 'Inconsolata', monospace; font-size: 14px; outline: none; margin-bottom: 12px; transition: border-color 0.2s; }
-  .addr-input:focus { border-color: #f59e0b; }
-  .addr-input::placeholder { color: #3a3a3a; }
-  .primary-btn { width: 100%; padding: 14px; background: #f59e0b; color: #0f0f0f; border: none; border-radius: 12px; font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 800; cursor: pointer; transition: opacity 0.15s; }
+  .no-gps-title { font-size: 17px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+  .no-gps-sub { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 14px; }
+  .addr-input { width: 100%; background: #0c0c10; border: 1.5px solid #2a2a3a; border-radius: 10px; padding: 12px 14px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 13px; outline: none; margin-bottom: 10px; transition: border-color 0.2s; }
+  .addr-input:focus { border-color: var(--accent); }
+  .addr-input::placeholder { color: #333; }
+  .primary-btn { width: 100%; padding: 13px; background: var(--accent); color: #0c0c10; border: none; border-radius: 10px; font-family: 'Bebas Neue', sans-serif; font-size: 17px; letter-spacing: 2px; cursor: pointer; }
   .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .cancel-btn { width: 100%; padding: 11px; background: none; border: none; color: rgba(255,255,255,0.25); font-family: 'Inconsolata', monospace; font-size: 13px; cursor: pointer; margin-top: 8px; }
+  .cancel-btn { width: 100%; padding: 10px; background: none; border: none; color: var(--muted); font-family: 'DM Mono', monospace; font-size: 12px; cursor: pointer; margin-top: 6px; }
 
-  /* TOAST */
-  .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #1e1e1e; border: 1px solid #333; color: #fff; padding: 10px 20px; border-radius: 20px; font-family: 'DM Mono', monospace; font-size: 12px; letter-spacing: 0.5px; z-index: 999; white-space: nowrap; animation: toastIn 0.18s ease; }
+  .paste-area { width: 100%; background: #0c0c10; border: 1.5px solid #2a2a3a; border-radius: 10px; padding: 12px 14px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12px; outline: none; resize: none; margin-bottom: 12px; transition: border-color 0.2s; line-height: 1.6; }
+  .paste-area:focus { border-color: var(--accent); }
+  .modal-actions { display: flex; gap: 10px; }
+  .ghost-btn { padding: 13px 18px; background: none; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); font-family: 'DM Mono', monospace; font-size: 12px; cursor: pointer; }
+
+  .toast { position: fixed; bottom: 75px; left: 50%; transform: translateX(-50%); background: #1e1e2e; border: 1px solid #2a2a3a; color: var(--text); padding: 9px 18px; border-radius: 20px; font-family: 'DM Mono', monospace; font-size: 11px; z-index: 999; white-space: nowrap; animation: toastIn 0.18s ease; pointer-events: none; }
   @keyframes toastIn { from{opacity:0;transform:translateX(-50%) translateY(8px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
 `;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PROFIT CALCULATOR
+// APP
 // ═══════════════════════════════════════════════════════════════════════════════
+export default function App() {
+  const [activeTab, setActiveTab]     = useState("plan");
+  const [stops, setStops]             = useState([]);
+  const [sessionDate, setSessionDate] = useState(getTodayKey());
+  const [startTime, setStartTime]     = useState("08:00");
+  const [endTime, setEndTime]         = useState("14:00");
+  const [defaultMins, setDefaultMins] = useState(20);
+  const [connected, setConnected]     = useState(false);
+  const [expandedId, setExpandedId]   = useState(null);
+  const [toast, setToast]             = useState(null);
+  const [newAddr, setNewAddr]         = useState("");
+  const [newName, setNewName]         = useState("");
+  const [newType, setNewType]         = useState("garage");
+  const [newOpen, setNewOpen]         = useState("");
+  const [newClose, setNewClose]       = useState("");
+  const [adding, setAdding]           = useState(false);
+  const [pasteModal, setPasteModal]   = useState(false);
+  const [pasteText, setPasteText]     = useState("");
+  const [pasting, setPasting]         = useState(false);
+  const [userPos, setUserPos]         = useState(null);
+  const [gpsReady, setGpsReady]       = useState(false);
+  const [mapPins, setMapPins]         = useState([]);
+  const [mapSheet, setMapSheet]       = useState(null);
+  const [editPin, setEditPin]         = useState(null);
+  const [pendingPos, setPending]      = useState(null);
+  const [manualAddr, setManual]       = useState("");
+  const [geocoding, setGeocoding]     = useState(false);
+  const [mapSize, setMapSize]         = useState({ w: 390, h: 500 });
+  const [nowMins, setNowMins]         = useState(getNowMins());
+  const mapRef   = useRef(null);
+  const watchId  = useRef(null);
+  const pollRef  = useRef(null);
+  const clockRef = useRef(null);
 
-function ProfitCalc({ avgSold, amazonPrice, shipping }) {
-  const [cost, setCost] = useState("");
-  const [platform, setPlatform] = useState("ebay");
-  const [overrideShipping, setOverrideShipping] = useState("");
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2300); };
 
-  const sellPrice = platform === "ebay" ? avgSold : amazonPrice;
-  const feeRate = platform === "ebay" ? 0.1325 : 0.15;
-  const shippingCost = overrideShipping !== ""
-    ? parseFloat(overrideShipping) || 0
-    : platform === "ebay" ? (shipping?.estimatedCost ?? 5.50) : 0;
-
-  const fees = sellPrice ? +(sellPrice * feeRate).toFixed(2) : 0;
-  const net = sellPrice ? +(sellPrice - fees - shippingCost - (parseFloat(cost) || 0)).toFixed(2) : 0;
-  const roi = cost && parseFloat(cost) > 0 && sellPrice ? +((net / parseFloat(cost)) * 100).toFixed(0) : null;
-
-  return (
-    <div className="profit-card">
-      {platform === "ebay" && shipping && (
-        <div style={{ background:"rgba(0,229,160,0.06)", border:"1px solid rgba(0,229,160,0.2)", borderRadius:10, padding:"10px 14px", marginBottom:16, display:"flex", alignItems:"flex-start", gap:10 }}>
-          <span style={{ fontSize:16 }}>📦</span>
-          <div>
-            <div style={{ fontSize:11, color:"var(--accent)", fontFamily:"'DM Mono',monospace", letterSpacing:1, marginBottom:3 }}>EBAY SHIPPING ESTIMATE</div>
-            <div style={{ fontSize:13, color:"var(--text)" }}><strong>${(shipping.estimatedCost??5.50).toFixed(2)}</strong>{" · "}{shipping.carrier}{" · "}{shipping.packageType}{" · "}{shipping.weightEstimate}</div>
-            {shipping.note && <div style={{ fontSize:11, color:"var(--muted)", marginTop:3 }}>{shipping.note}</div>}
-          </div>
-        </div>
-      )}
-
-      <div className="calc-input-row">
-        <div className="calc-field">
-          <div className="option-label">YOUR COST $</div>
-          <input className="option-input" type="number" placeholder="0.00" value={cost} onChange={e => setCost(e.target.value)} />
-        </div>
-        <div className="calc-field">
-          <div className="option-label">SELL ON</div>
-          <select className="option-input" value={platform} onChange={e => setPlatform(e.target.value)}>
-            <option value="ebay">eBay</option>
-            <option value="amazon">Amazon (FBA)</option>
-          </select>
-        </div>
-        <div className="calc-field">
-          <div className="option-label">OVERRIDE SHIPPING $</div>
-          <input className="option-input" type="number" placeholder={platform==="ebay" ? `${(shipping?.estimatedCost??5.50).toFixed(2)} (est)` : "0.00"} value={overrideShipping} onChange={e => setOverrideShipping(e.target.value)} />
-        </div>
-      </div>
-
-      {sellPrice ? (
-        <>
-          <div className="profit-row"><span className="profit-row-label">Sale Price (avg sold)</span><span className="profit-row-value profit-neutral">${sellPrice.toFixed(2)}</span></div>
-          <div className="profit-row"><span className="profit-row-label">Platform Fees ({(feeRate*100).toFixed(2)}%)</span><span className="profit-row-value profit-negative">−${fees}</span></div>
-          <div className="profit-row">
-            <span className="profit-row-label">Shipping to Buyer{overrideShipping===""&&platform==="ebay"&&<span style={{fontSize:10,color:"var(--accent)",marginLeft:5}}>eBay est.</span>}</span>
-            <span className="profit-row-value profit-negative">−${shippingCost.toFixed(2)}</span>
-          </div>
-          {cost && parseFloat(cost) > 0 && <div className="profit-row"><span className="profit-row-label">Your Purchase Cost</span><span className="profit-row-value profit-negative">−${parseFloat(cost).toFixed(2)}</span></div>}
-          <div className="profit-total">
-            <span className="profit-total-label">NET PROFIT</span>
-            <span className={`profit-total-value ${net>=0?"profit-positive":"profit-negative"}`}>
-              {net>=0?"+":""}${net.toFixed(2)}
-              {roi!==null && <span style={{fontSize:14,marginLeft:8,color:roi>=30?"var(--ebay-green)":roi>=0?"var(--warn)":"var(--danger)"}}>({roi}% ROI)</span>}
-            </span>
-          </div>
-          {roi !== null && (
-            <div style={{ marginTop:14, paddingTop:12, borderTop:"1px solid var(--border)" }}>
-              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
-                <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"'DM Mono',monospace" }}>ROI METER</span>
-                <span style={{ fontSize:10, color:"var(--muted)", fontFamily:"'DM Mono',monospace" }}>{roi<0?"💸 losing":roi<20?"😐 thin":roi<50?"👍 decent":"🔥 great flip"}</span>
-              </div>
-              <div style={{ background:"var(--border)", borderRadius:4, height:5, overflow:"hidden" }}>
-                <div style={{ width:`${Math.min(Math.max(roi,0),100)}%`, height:"100%", background:roi<20?"var(--danger)":roi<50?"var(--warn)":"var(--ebay-green)", borderRadius:4, transition:"width 0.4s ease" }}/>
-              </div>
-            </div>
-          )}
-        </>
-      ) : (
-        <p style={{ color:"var(--muted)", fontSize:13, textAlign:"center" }}>No price data for this platform</p>
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// FLIPSCOUT TAB
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function FlipScout() {
-  const [inputTab, setInputTab] = useState("photo");
-  const [description, setDescription] = useState("");
-  const [imageData, setImageData] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [loadingStep, setLoadingStep] = useState("");
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
-  const [dragOver, setDragOver] = useState(false);
-  const fileRef = useRef();
-
-  const handleFile = useCallback((file) => {
-    if (!file || !file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = (e) => { setImagePreview(e.target.result); setImageData(e.target.result.split(",")[1]); };
-    reader.readAsDataURL(file);
+  // Clock
+  useEffect(() => {
+    clockRef.current = setInterval(() => setNowMins(getNowMins()), 60000);
+    return () => clearInterval(clockRef.current);
   }, []);
 
-  const handleDrop = (e) => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]); };
-
-  const doResearch = async () => {
-    setLoading(true); setError(null); setResult(null);
+  // Load stops
+  const loadStops = useCallback(async () => {
     try {
-      let itemDescription = description;
-      if (inputTab === "photo" && imageData) {
-        setLoadingStep("🔍 Identifying item from photo...");
-        const r = await fetch("/api/claude", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1000, messages: [{ role: "user", content: [
-            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageData } },
-            { type: "text", text: "Identify this item for resale research. Provide a specific, searchable description including brand, model, item type, condition if visible, and notable features. Be specific — include model numbers if visible. Format: just the description, no extra text." }
-          ]}]})
-        });
-        const d = await r.json();
-        itemDescription = d.content?.find(b => b.type === "text")?.text || "Unknown item";
-      }
-
-      setLoadingStep("📦 Searching eBay sold listings...");
-      await new Promise(r => setTimeout(r, 500));
-      setLoadingStep("🛒 Checking Amazon pricing...");
-      await new Promise(r => setTimeout(r, 500));
-      setLoadingStep("📊 Analyzing profit potential...");
-
-      const res = await fetch("/api/claude", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: ANTHROPIC_MODEL, max_tokens: 1000,
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-          messages: [{ role: "user", content: `You are a resale market research expert. Research this item and return ONLY a valid JSON object (no markdown, no explanation):
-
-ITEM: "${itemDescription}"
-
-Search for:
-1. eBay SOLD listings (not active) — find real recent sold prices
-2. Amazon current price
-
-Return this exact JSON structure:
-{
-  "itemName": "clean product name",
-  "itemSummary": "brief 1-sentence description",
-  "ebay": {
-    "avgSoldPrice": number or null,
-    "soldCount": number,
-    "lowSold": number or null,
-    "highSold": number or null,
-    "recentSales": [
-      { "title": "listing title", "price": number, "date": "Mon YYYY", "condition": "Used/New/etc" }
-    ]
-  },
-  "amazon": {
-    "currentPrice": number or null,
-    "priceRange": "low-high string or null",
-    "condition": "New/Used/Both",
-    "note": "brief note about Amazon listings"
-  },
-  "shipping": {
-    "estimatedCost": number,
-    "carrier": "USPS / UPS / FedEx / etc",
-    "packageType": "Poly Mailer / Small Box / Medium Box / Large Box / Freight",
-    "weightEstimate": "e.g. 1-2 lbs",
-    "note": "brief reason based on what eBay sellers actually charged"
-  },
-  "verdict": {
-    "rating": "BUY" | "MAYBE" | "PASS",
-    "reason": "2-3 sentence explanation factoring in realistic shipping cost."
-  }
-}
-
-SHIPPING GUIDANCE: Look at what actual eBay sold listings charged. Small/light under 1lb: USPS First Class ~$4-6. Medium 1-5lbs: USPS Priority ~$8-14. Heavy/large: UPS Ground ~$15-30. If most had free shipping set estimatedCost to 0.
-
-Use real web search data. If you can't find sold data, use null. Be honest.` }]
-        })
-      });
-
-      const data = await res.json();
-      if (!data.content) throw new Error(data.error?.message || JSON.stringify(data));
-      const fullText = data.content.filter(b => b.type === "text").map(b => b.text).join("\n");
-      const parsed = parseResearch(fullText);
-      if (!parsed) throw new Error("Couldn't parse research data. Try a more specific description.");
-      parsed._rawDescription = itemDescription;
-      setResult(parsed);
-    } catch (err) {
-      setError(err.message || "Something went wrong. Please try again.");
-    } finally {
-      setLoading(false); setLoadingStep("");
+      const data = await sbFetch(`/hunt_stops?session_date=eq.${sessionDate}&order=sort_order.asc,created_at.asc`);
+      setStops(data); setConnected(true);
+    } catch {
+      try { const l = localStorage.getItem(`fs_${sessionDate}`); if (l) setStops(JSON.parse(l)); } catch {}
+      setConnected(false);
     }
-  };
-
-  const reset = () => { setResult(null); setError(null); setImageData(null); setImagePreview(null); setDescription(""); };
-  const canSearch = (inputTab === "photo" && imageData) || (inputTab === "text" && description.trim().length > 3);
-
-  const verdictConfig = {
-    BUY:   { cls: "verdict-buy",   icon: "💰", label: "BUY IT" },
-    MAYBE: { cls: "verdict-maybe", icon: "🤔", label: "MAYBE — DO THE MATH" },
-    PASS:  { cls: "verdict-pass",  icon: "🚫", label: "PASS ON IT" },
-  };
-
-  return (
-    <div className="page scout">
-      <div className="scout-header">
-        <div className="logo">
-          <span className="logo-flip">Flip</span>
-          <span className="logo-scout">Scout</span>
-          <span className="logo-tag">by shannon</span>
-        </div>
-        <div className="header-pills">
-          <span className="pill pill-ebay">● eBay Sold</span>
-          <span className="pill pill-amazon">● Amazon</span>
-        </div>
-      </div>
-
-      <div className="scout-main">
-        {!result && !loading && (
-          <div className="input-card">
-            <div className="input-tab-bar">
-              <button className={`input-tab ${inputTab==="photo"?"active":""}`} onClick={() => setInputTab("photo")}>📷 Scan a Photo</button>
-              <button className={`input-tab ${inputTab==="text"?"active":""}`} onClick={() => setInputTab("text")}>✏️ Describe It</button>
-            </div>
-            <div className="input-body">
-              {inputTab === "photo" ? (
-                imagePreview ? (
-                  <>
-                    <img src={imagePreview} alt="Preview" className="preview-img" />
-                    <button className="reset-btn" onClick={() => { setImageData(null); setImagePreview(null); }}>× Remove photo</button>
-                  </>
-                ) : (
-                  <div className={`drop-zone ${dragOver?"drag-over":""}`} onDragOver={e=>{e.preventDefault();setDragOver(true)}} onDragLeave={()=>setDragOver(false)} onDrop={handleDrop}>
-                    <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={e=>handleFile(e.target.files[0])} />
-                    <span className="drop-icon">📸</span>
-                    <div className="drop-label">Tap to take a photo or upload</div>
-                    <div className="drop-sub">JPG, PNG, HEIC — drag & drop works too</div>
-                  </div>
-                )
-              ) : (
-                <textarea className="desc-textarea" rows={4} placeholder="e.g. Cuisinart 14-cup food processor DFP-14BCWX, used, no scratches…" value={description} onChange={e=>setDescription(e.target.value)} />
-              )}
-              <button className="search-btn" onClick={doResearch} disabled={!canSearch}>🔍 RESEARCH THIS ITEM</button>
-            </div>
-          </div>
-        )}
-
-        {loading && <div className="loading-wrap"><div className="spinner"/><div className="loading-step">{loadingStep}</div></div>}
-
-        {error && <><div className="error-card">⚠️ {error}</div><br/><button className="reset-btn" onClick={reset}>← Try again</button></>}
-
-        {result && (
-          <div className="results">
-            <div className="item-banner">
-              <div className="item-name">{result.itemName}</div>
-              <div className="item-condition">{result.itemSummary}</div>
-            </div>
-
-            {result.verdict && (() => {
-              const v = verdictConfig[result.verdict.rating] || verdictConfig.MAYBE;
-              return (
-                <div className={`verdict-card ${v.cls}`}>
-                  <div className="verdict-icon">{v.icon}</div>
-                  <div><div className="verdict-label">{v.label}</div><div className="verdict-reason">{result.verdict.reason}</div></div>
-                </div>
-              );
-            })()}
-
-            <div className="metrics-grid">
-              <div className="metric-card">
-                <div className="metric-source ebay">◆ EBAY SOLD AVG</div>
-                <div className="metric-value" style={{color:"var(--ebay-green)"}}>{result.ebay?.avgSoldPrice ? `$${result.ebay.avgSoldPrice.toFixed(0)}` : "N/A"}</div>
-                <div className="metric-label">average recent sale</div>
-                {result.ebay?.lowSold && result.ebay?.highSold && <div className="metric-sub">Range: ${result.ebay.lowSold}–${result.ebay.highSold}</div>}
-              </div>
-              <div className="metric-card">
-                <div className="metric-source ebay">◆ EBAY SOLD COUNT</div>
-                <div className="metric-value" style={{color:"var(--accent)"}}>{result.ebay?.soldCount ?? "—"}</div>
-                <div className="metric-label">recent sold listings</div>
-                <div className="metric-sub">completed sales only</div>
-              </div>
-              <div className="metric-card">
-                <div className="metric-source amazon">◆ AMAZON PRICE</div>
-                <div className="metric-value" style={{color:"var(--amazon-orange)"}}>{result.amazon?.currentPrice ? `$${result.amazon.currentPrice.toFixed(0)}` : "N/A"}</div>
-                <div className="metric-label">{result.amazon?.condition || "current"}</div>
-                {result.amazon?.note && <div className="metric-sub">{result.amazon.note}</div>}
-              </div>
-            </div>
-
-            {result.ebay?.recentSales?.length > 0 && (
-              <div>
-                <div className="section-title">RECENT EBAY SOLD <span className="badge badge-count">{result.ebay.recentSales.length} sales</span></div>
-                <div className="sold-list">
-                  {result.ebay.recentSales.map((s,i) => (
-                    <div className="sold-row" key={i}>
-                      <div className="sold-title">{s.title}</div>
-                      <div className="sold-condition">{s.condition}</div>
-                      <div className="sold-date">{s.date}</div>
-                      <div className="sold-price">${typeof s.price==="number" ? s.price.toFixed(2) : s.price}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div>
-              <div className="section-title">PROFIT CALCULATOR</div>
-              <ProfitCalc avgSold={result.ebay?.avgSoldPrice} amazonPrice={result.amazon?.currentPrice} shipping={result.shipping} />
-            </div>
-
-            <button className="reset-btn" onClick={reset}>← Research another item</button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SALEMAP TAB
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function SaleMap() {
-  const [pins, setPins]           = useState(loadPins);
-  const [userPos, setUserPos]     = useState(null);
-  const [gpsReady, setGpsReady]   = useState(false);
-  const [sheet, setSheet]         = useState(null);
-  const [editPin, setEditPin]     = useState(null);
-  const [pendingPos, setPending]  = useState(null);
-  const [manualAddr, setManual]   = useState("");
-  const [geocoding, setGeocoding] = useState(false);
-  const [toast, setToast]         = useState(null);
-  const [mapSize, setMapSize]     = useState({ w: 390, h: 600 });
-  const mapRef  = useRef(null);
-  const watchId = useRef(null);
-
-  useEffect(() => savePins(pins), [pins]);
+  }, [sessionDate]);
 
   useEffect(() => {
+    loadStops();
+    clearInterval(pollRef.current);
+    pollRef.current = setInterval(loadStops, 8000);
+    return () => clearInterval(pollRef.current);
+  }, [loadStops]);
+
+  useEffect(() => { try { localStorage.setItem(`fs_${sessionDate}`, JSON.stringify(stops)); } catch {} }, [stops, sessionDate]);
+
+  // Map size
+  useEffect(() => {
     const m = () => mapRef.current && setMapSize({ w: mapRef.current.offsetWidth, h: mapRef.current.offsetHeight });
-    m();
-    window.addEventListener("resize", m);
-    return () => window.removeEventListener("resize", m);
+    m(); window.addEventListener("resize", m); return () => window.removeEventListener("resize", m);
   }, []);
 
+  // GPS
   useEffect(() => {
     if (!navigator.geolocation) return;
     watchId.current = navigator.geolocation.watchPosition(
@@ -739,18 +398,62 @@ function SaleMap() {
     return () => navigator.geolocation.clearWatch(watchId.current);
   }, []);
 
-  const toast_ = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2200); };
+  const addStop = async (address, name, type, openTime, closeTime) => {
+    if (!address.trim()) return;
+    setAdding(true);
+    try {
+      const geo = await geocode(address);
+      const stop = {
+        session_date: sessionDate,
+        name: name.trim() || address.split(",")[0],
+        address: address.trim(),
+        lat: geo?.lat ?? null, lng: geo?.lng ?? null,
+        type, notes: "", status: "pending",
+        est_minutes: defaultMins,
+        open_time: openTime || null,
+        close_time: closeTime || null,
+        sort_order: stops.length,
+      };
+      if (connected) {
+        const [created] = await sbFetch("/hunt_stops", { method: "POST", body: JSON.stringify(stop) });
+        setStops(p => [...p, created]);
+      } else {
+        setStops(p => [...p, { ...stop, id: crypto.randomUUID(), created_at: new Date().toISOString() }]);
+      }
+      showToast(`📍 Added: ${stop.name}`);
+      setNewAddr(""); setNewName(""); setNewOpen(""); setNewClose("");
+    } catch { showToast("⚠️ Couldn't add stop"); }
+    finally { setAdding(false); }
+  };
+
+  const handlePaste = async () => {
+    const lines = pasteText.split("\n").map(l => l.trim()).filter(l => l.length > 5);
+    if (!lines.length) return;
+    setPasting(true);
+    for (const line of lines) { await addStop(line, "", newType, "", ""); await new Promise(r => setTimeout(r, 350)); }
+    setPasting(false); setPasteModal(false); setPasteText("");
+  };
+
+  const updateStop = async (id, patch) => {
+    setStops(p => p.map(s => s.id === id ? { ...s, ...patch } : s));
+    if (connected) { try { await sbFetch(`/hunt_stops?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(patch) }); } catch {} }
+  };
+
+  const deleteStop = async (id) => {
+    setStops(p => p.filter(s => s.id !== id)); setExpandedId(null);
+    if (connected) { try { await sbFetch(`/hunt_stops?id=eq.${id}`, { method: "DELETE" }); } catch {} }
+  };
 
   const handleMark = () => {
-    if (gpsReady && userPos) { setPending(userPos); setSheet("new"); }
-    else setSheet("noGps");
+    if (gpsReady && userPos) { setPending(userPos); setMapSheet("new"); }
+    else setMapSheet("noGps");
   };
 
   const confirmPin = (status) => {
     if (!pendingPos) return;
-    setPins(p => [...p, { id: Date.now(), ...pendingPos, status }]);
-    setSheet(null); setPending(null);
-    toast_(`${MAP_STATUS[status].emoji} Marked as ${MAP_STATUS[status].label}`);
+    setMapPins(p => [...p, { id: Date.now(), ...pendingPos, status }]);
+    setMapSheet(null); setPending(null);
+    showToast(`${STOP_STATUS[status]?.emoji ?? "📍"} Marked`);
   };
 
   const geocodeManual = async () => {
@@ -759,18 +462,35 @@ function SaleMap() {
     try {
       const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(manualAddr)}&format=json&limit=1`);
       const d = await r.json();
-      if (d[0]) { setPending({ lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) }); setManual(""); setSheet("new"); }
-      else toast_("⚠️ Address not found");
-    } catch { toast_("⚠️ Geocoding failed"); }
+      if (d[0]) { setPending({ lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) }); setManual(""); setMapSheet("new"); }
+      else showToast("⚠️ Address not found");
+    } catch { showToast("⚠️ Geocoding failed"); }
     finally { setGeocoding(false); }
   };
 
-  const updatePin = (id, status) => { setPins(p => p.map(x => x.id===id ? {...x,status} : x)); setSheet(null); setEditPin(null); toast_(`${MAP_STATUS[status].emoji} Updated`); };
-  const deletePin = (id)         => { setPins(p => p.filter(x => x.id!==id)); setSheet(null); setEditPin(null); toast_("Pin removed"); };
-  const clearAll  = ()           => { if (pins.length && window.confirm(`Clear all ${pins.length} pins?`)) { setPins([]); toast_("Map cleared"); } };
+  const updatePin = (id, status) => { setMapPins(p => p.map(x => x.id===id?{...x,status}:x)); setMapSheet(null); setEditPin(null); showToast(`${STOP_STATUS[status]?.emoji ?? "📍"} Updated`); };
+  const deletePin = (id) => { setMapPins(p => p.filter(x => x.id!==id)); setMapSheet(null); setEditPin(null); showToast("Pin removed"); };
 
-  const allLats = [...pins.map(p=>p.lat), userPos?.lat].filter(Boolean);
-  const allLngs = [...pins.map(p=>p.lng), userPos?.lng].filter(Boolean);
+  // Schedule
+  const scheduled = buildSchedule(stops, startTime, defaultMins);
+
+  // Day status
+  const pendingStops = scheduled.filter(s => s.status === "pending");
+  let dayStatus = null;
+  if (stops.length > 0 && pendingStops.length > 0) {
+    const next = pendingStops[0];
+    const diff = next.arriveAt - nowMins;
+    if (diff > 10) dayStatus = { type: "ahead", msg: `Running ${Math.abs(diff)}min ahead` };
+    else if (diff < -10) dayStatus = { type: "behind", msg: `Running ${Math.abs(diff)}min behind` };
+    else dayStatus = { type: "ontrack", msg: "Right on schedule 👌" };
+  } else if (stops.length > 0 && pendingStops.length === 0) {
+    dayStatus = { type: "ahead", msg: "All stops done! 🎉" };
+  }
+
+  // Map bounds
+  const allGeo = [...stops, ...mapPins].filter(s => s.lat && s.lng);
+  const allLats = [...allGeo.map(s => s.lat), userPos?.lat].filter(Boolean);
+  const allLngs = [...allGeo.map(s => s.lng), userPos?.lng].filter(Boolean);
   const pad = 0.003;
   const bounds = allLats.length ? {
     minLat: Math.min(...allLats)-pad, maxLat: Math.max(...allLats)+pad,
@@ -781,141 +501,405 @@ function SaleMap() {
     ? `https://www.openstreetmap.org/export/embed.html?bbox=${bounds.minLng},${bounds.minLat},${bounds.maxLng},${bounds.maxLat}&layer=mapnik`
     : `https://www.openstreetmap.org/export/embed.html?bbox=-86.85,33.35,-86.65,33.55&layer=mapnik`;
 
-  const counts = { visited: pins.filter(p=>p.status==="visited").length, skip: pins.filter(p=>p.status==="skip").length, return: pins.filter(p=>p.status==="return").length };
-
-  return (
-    <div className="page map" style={{ background:"#111" }}>
-      <div className="map-header">
-        <div className="map-logo"><span className="map-logo-sale">Sale</span><span className="map-logo-map">Map</span></div>
-        <div className="map-stats">
-          <div className="map-stat"><div className="map-stat-num green">{counts.visited}</div><div className="map-stat-label">VISITED</div></div>
-          <div className="map-stat"><div className="map-stat-num gray">{counts.skip}</div><div className="map-stat-label">SKIP</div></div>
-          <div className="map-stat"><div className="map-stat-num red">{counts.return}</div><div className="map-stat-label">RETURN</div></div>
-          <div className="map-stat"><div className="map-stat-num">{pins.length}</div><div className="map-stat-label">TOTAL</div></div>
-        </div>
-      </div>
-
-      <div className="map-container" ref={mapRef}>
-        <iframe key={mapSrc} className="map-iframe" src={mapSrc} title="SaleMap" scrolling="no" />
-
-        {bounds && (
-          <svg className="pin-overlay" viewBox={`0 0 ${mapSize.w} ${mapSize.h}`}>
-            {userPos && (() => {
-              const {x,y} = projectPin(userPos.lat, userPos.lng, bounds, mapSize.w, mapSize.h);
-              return <g><circle cx={x} cy={y} r={13} fill="rgba(59,130,246,0.18)"/><circle cx={x} cy={y} r={6} fill="#3b82f6" stroke="#fff" strokeWidth="2"/></g>;
-            })()}
-            {pins.map(pin => {
-              const {x,y} = projectPin(pin.lat, pin.lng, bounds, mapSize.w, mapSize.h);
-              const col = MAP_STATUS[pin.status]?.color ?? "#f59e0b";
-              return (
-                <g key={pin.id} style={{pointerEvents:"all",cursor:"pointer"}} onClick={() => { setEditPin(pin); setSheet("edit"); }}>
-                  <ellipse cx={x} cy={y+17} rx={5} ry={2.5} fill="rgba(0,0,0,0.28)"/>
-                  <path d={`M${x},${y+17} C${x-5},${y+9} ${x-11},${y} ${x-11},${y-9} A11,11 0 1,1 ${x+11},${y-9} C${x+11},${y} ${x+5},${y+9} ${x},${y+17}Z`} fill={col} stroke="#fff" strokeWidth="1.8"/>
-                  <text x={x} y={y-6} textAnchor="middle" dominantBaseline="middle" fontSize="11">{MAP_STATUS[pin.status]?.emoji ?? "📍"}</text>
-                </g>
-              );
-            })}
-          </svg>
-        )}
-
-        <div className="map-legend">
-          {Object.entries(MAP_STATUS).map(([k,v]) => (
-            <div className="legend-item" key={k}><div className="legend-dot" style={{background:v.color}}/>{v.label}</div>
-          ))}
-        </div>
-
-        {pins.length > 0 && <button className="map-clear-btn" onClick={clearAll}>Clear all</button>}
-
-        <div className="gps-badge"><div className={`gps-dot ${gpsReady?"on":""}`}/>{gpsReady?"GPS ready":"No GPS"}</div>
-
-        <div className="mark-btn-wrap">
-          <button className="mark-btn" onClick={handleMark}>
-            <span className="mark-btn-icon">📍</span>
-            <span className="mark-btn-label">MARK</span>
-          </button>
-          <span className="mark-hint">{gpsReady?"Tap to mark this house":"Tap to enter address"}</span>
-        </div>
-      </div>
-
-      {sheet === "new" && (
-        <div className="map-backdrop" onClick={e=>e.target===e.currentTarget&&setSheet(null)}>
-          <div className="map-sheet">
-            <div className="sheet-handle"/>
-            <div className="sheet-title">WHAT IS THIS STOP?</div>
-            <div className="status-row">
-              {Object.entries(MAP_STATUS).map(([k,v]) => (
-                <button key={k} className="status-btn" style={{borderColor:v.color,color:v.color}} onClick={()=>confirmPin(k)}>
-                  <span className="status-emoji">{v.emoji}</span><span className="status-label">{v.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {sheet === "edit" && editPin && (
-        <div className="map-backdrop" onClick={e=>e.target===e.currentTarget&&setSheet(null)}>
-          <div className="map-sheet">
-            <div className="sheet-handle"/>
-            <div className="sheet-title">CHANGE STATUS</div>
-            <div className="status-row">
-              {Object.entries(MAP_STATUS).map(([k,v]) => (
-                <button key={k} className="status-btn" style={{borderColor:v.color,color:v.color,background:editPin.status===k?v.color+"22":"none"}} onClick={()=>updatePin(editPin.id,k)}>
-                  <span className="status-emoji">{v.emoji}</span><span className="status-label">{v.label}</span>
-                </button>
-              ))}
-            </div>
-            <button className="del-btn" onClick={()=>deletePin(editPin.id)}>🗑 Remove this pin</button>
-          </div>
-        </div>
-      )}
-
-      {sheet === "noGps" && (
-        <div className="map-backdrop" onClick={e=>e.target===e.currentTarget&&setSheet(null)}>
-          <div className="map-sheet">
-            <div className="sheet-handle"/>
-            <div className="no-gps-title">GPS not available</div>
-            <div className="no-gps-sub">Enable location in your browser settings, or type an address to drop a pin manually.</div>
-            <input className="addr-input" placeholder="123 Oak St, Birmingham AL" value={manualAddr} onChange={e=>setManual(e.target.value)} onKeyDown={e=>e.key==="Enter"&&geocodeManual()} autoFocus />
-            <button className="primary-btn" onClick={geocodeManual} disabled={geocoding||!manualAddr.trim()}>{geocoding?"Finding…":"Drop Pin Here"}</button>
-            <button className="cancel-btn" onClick={()=>setSheet(null)}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {toast && <div className="toast">{toast}</div>}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ROOT APP — TAB SHELL
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export default function App() {
-  const [activeTab, setActiveTab] = useState("scout");
+  const total   = stops.length;
+  const visited = stops.filter(s => s.status==="visited").length;
+  const pending = stops.filter(s => s.status==="pending").length;
+  const skipped = stops.filter(s => s.status==="skip").length;
+  const today   = new Date().toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
 
   return (
     <>
       <style>{STYLES}</style>
       <div className="shell">
-        {/* PAGE CONTENT */}
-        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
-          {activeTab === "scout" && <FlipScout />}
-          {activeTab === "map"   && <SaleMap />}
+
+        {/* HEADER */}
+        <div className="app-header">
+          <div className="app-logo"><span>Flip</span>Scout</div>
+          <div className="header-right">
+            <div className={`sync-dot ${connected?"live":""}`}/>
+            <div className="date-badge">{today}</div>
+          </div>
+        </div>
+
+        <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", minHeight:0 }}>
+
+          {/* ══════════ PLAN TAB ══════════ */}
+          {activeTab === "plan" && (
+            <div className="page">
+              <div className="plan-wrap">
+
+                {/* Stats */}
+                <div className="stats-row">
+                  <div className="stat-chip"><div className="stat-num">{total}</div><div className="stat-lbl">STOPS</div></div>
+                  <div className="stat-chip"><div className="stat-num amber">{pending}</div><div className="stat-lbl">LEFT</div></div>
+                  <div className="stat-chip"><div className="stat-num green">{visited}</div><div className="stat-lbl">DONE</div></div>
+                  <div className="stat-chip"><div className="stat-num gray">{skipped}</div><div className="stat-lbl">SKIPPED</div></div>
+                </div>
+
+                {/* Schedule settings + timeline */}
+                <div className="section-card">
+                  <div className="section-label">DAY SCHEDULE</div>
+                  <div className="settings-row">
+                    <div className="settings-field">
+                      <div className="field-label">START</div>
+                      <input className="field-input" type="time" value={startTime} onChange={e => setStartTime(e.target.value)} />
+                    </div>
+                    <div className="settings-field">
+                      <div className="field-label">END</div>
+                      <input className="field-input" type="time" value={endTime} onChange={e => setEndTime(e.target.value)} />
+                    </div>
+                    <div className="settings-field">
+                      <div className="field-label">DATE</div>
+                      <input className="field-input" type="date" value={sessionDate} onChange={e => setSessionDate(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="field-label" style={{ marginBottom:6 }}>DEFAULT MINS PER STOP</div>
+                  <div className="mins-row">
+                    {[10,15,20,30,45].map(m => (
+                      <button key={m} className={`mins-chip ${defaultMins===m?"active":""}`} onClick={() => setDefaultMins(m)}>{m}m</button>
+                    ))}
+                  </div>
+
+                  {/* Timeline */}
+                  {scheduled.length > 0 && (
+                    <div className="timeline">
+                      {scheduled.map((stop, i) => {
+                        const st   = STOP_TYPES[stop.type] || STOP_TYPES.garage;
+                        const isNow = stop.arriveAt <= nowMins && nowMins < stop.leaveAt;
+                        const dotCol = stop.status==="visited" ? "#22c55e" : stop.status==="skip" ? "#6b7280" : st.color;
+                        const tooEarly = stop.open_time && stop.arriveAt < timeToMins(stop.open_time);
+                        return (
+                          <div className="tl-row" key={stop.id}>
+                            <div className={`tl-time ${isNow?"now":""}`}>{minsToTime(stop.arriveAt)}</div>
+                            <div className="tl-spine">
+                              <div className="tl-dot" style={{ background: dotCol }}/>
+                              {i < scheduled.length - 1 && <div className="tl-line"/>}
+                            </div>
+                            <div className="tl-content">
+                              <div className={`tl-name ${isNow?"is-now":""}`}>{st.emoji} {stop.name}</div>
+                              <div className="tl-meta">
+                                <span>{stop.est_minutes || defaultMins}min</span>
+                                {stop.open_time && <span>{minsToTime(timeToMins(stop.open_time))}–{stop.close_time ? minsToTime(timeToMins(stop.close_time)) : "?"}</span>}
+                                {tooEarly && <span className="tl-warn">⚠️ Opens later</span>}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div className="tl-end">
+                        <div className="tl-end-time">{minsToTime(timeToMins(endTime))}</div>
+                        <div className="tl-end-dot"/>
+                        <div className="tl-end-label">Done for the day</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {dayStatus && (
+                    <div className={`day-status ${dayStatus.type}`}>
+                      {dayStatus.type==="ahead"?"✅":dayStatus.type==="behind"?"⚠️":"👌"} {dayStatus.msg}
+                    </div>
+                  )}
+                </div>
+
+                {/* Add stop */}
+                <div className="add-card">
+                  <div className="section-label">ADD A STOP</div>
+                  <div className="type-row">
+                    {Object.entries(STOP_TYPES).map(([k,v]) => (
+                      <button key={k} className={`type-chip ${newType===k?"active":""}`}
+                        style={{ background:newType===k?v.color:"none", color:newType===k?"#0c0c10":"var(--muted)", borderColor:newType===k?v.color:"var(--border)" }}
+                        onClick={() => setNewType(k)}
+                      >
+                        {v.emoji} {v.label}
+                      </button>
+                    ))}
+                  </div>
+                  <input className="add-input" placeholder="Name (e.g. Johnson Estate)" value={newName} onChange={e => setNewName(e.target.value)} />
+                  <input className="add-input" placeholder="Address (e.g. 123 Oak St, Hoover AL)" value={newAddr} onChange={e => setNewAddr(e.target.value)} onKeyDown={e => e.key==="Enter"&&addStop(newAddr,newName,newType,newOpen,newClose)} />
+                  <div className="hours-row">
+                    <div className="hours-field">
+                      <div className="field-label">OPENS (optional)</div>
+                      <input className="field-input" type="time" value={newOpen} onChange={e => setNewOpen(e.target.value)} />
+                    </div>
+                    <div className="hours-field">
+                      <div className="field-label">CLOSES (optional)</div>
+                      <input className="field-input" type="time" value={newClose} onChange={e => setNewClose(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="add-actions">
+                    <button className="add-btn" onClick={() => addStop(newAddr,newName,newType,newOpen,newClose)} disabled={adding||!newAddr.trim()}>
+                      {adding ? "…" : "+ ADD STOP"}
+                    </button>
+                    <button className="paste-btn" onClick={() => setPasteModal(true)}>📋 PASTE LIST</button>
+                  </div>
+                </div>
+
+                {/* Stops list */}
+                {stops.length > 0 && (
+                  <>
+                    <div className="stops-header">
+                      <span className="stops-header-label">YOUR STOPS</span>
+                      <button className="clear-all-btn" onClick={() => {
+                        if (!window.confirm(`Clear all ${stops.length} stops?`)) return;
+                        if (connected) sbFetch(`/hunt_stops?session_date=eq.${sessionDate}`,{method:"DELETE"}).catch(()=>{});
+                        setStops([]);
+                      }}>CLEAR ALL</button>
+                    </div>
+
+                    {scheduled.map(stop => {
+                      const st    = STOP_TYPES[stop.type] || STOP_TYPES.garage;
+                      const ms    = STOP_STATUS[stop.status] || STOP_STATUS.pending;
+                      const isOpen = expandedId === stop.id;
+                      const tooEarly = stop.open_time && stop.arriveAt < timeToMins(stop.open_time);
+                      return (
+                        <div key={stop.id} className={`stop-card ${stop.status}`} style={{ borderColor:isOpen?st.color+"55":undefined }}>
+                          <div className="stop-main" onClick={() => setExpandedId(isOpen?null:stop.id)}>
+                            <div className="stop-emoji">{st.emoji}</div>
+                            <div className="stop-info">
+                              <div className="stop-name">{stop.name}</div>
+                              <div className="stop-addr">{stop.address}</div>
+                              <div className="stop-pills">
+                                <span className="pill pill-time">{minsToTime(stop.arriveAt)}</span>
+                                <span className="pill pill-status" style={{ background:ms.color+"22", color:ms.color }}>{ms.emoji} {ms.label}</span>
+                                {stop.open_time && <span className="pill pill-hours">{minsToTime(timeToMins(stop.open_time))}{stop.close_time?`–${minsToTime(timeToMins(stop.close_time))}`:"+"}</span>}
+                                {tooEarly && <span className="pill pill-warn">⚠️ Opens later</span>}
+                                {stop.notes && <span className="pill pill-note">"{stop.notes}"</span>}
+                              </div>
+                            </div>
+                            <span className={`stop-chevron ${isOpen?"open":""}`}>›</span>
+                          </div>
+
+                          {isOpen && (
+                            <div className="stop-expanded">
+                              <div className="status-btns">
+                                {Object.entries(STOP_STATUS).map(([k,v]) => (
+                                  <button key={k} className="status-btn"
+                                    style={{ borderColor:v.color, color:v.color, background:stop.status===k?v.color+"22":"none" }}
+                                    onClick={() => updateStop(stop.id,{status:k})}
+                                  >
+                                    <span className="status-btn-emoji">{v.emoji}</span>
+                                    <span className="status-btn-label">{v.label}</span>
+                                  </button>
+                                ))}
+                              </div>
+                              <div className="expand-fields">
+                                <div className="expand-field">
+                                  <div className="field-label">MINS HERE</div>
+                                  <div className="mins-row">
+                                    {[10,15,20,30,45].map(m => (
+                                      <button key={m} className={`mins-chip ${(stop.est_minutes||defaultMins)===m?"active":""}`} onClick={() => updateStop(stop.id,{est_minutes:m})}>{m}m</button>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                              <textarea className="stop-notes-input" rows={2} placeholder="Notes… (e.g. lots of tools, cash only, Pete says good stuff)" value={stop.notes||""} onChange={e => updateStop(stop.id,{notes:e.target.value})} />
+                              <div className="stop-actions">
+                                <button className="s-btn nav-btn-s" onClick={() => window.open(`https://maps.apple.com/?q=${encodeURIComponent(stop.address)}`,"_blank")}>🧭 Navigate</button>
+                                <button className="s-btn" onClick={() => { navigator.clipboard?.writeText(stop.address); showToast("Copied!"); }}>📋 Copy</button>
+                                <button className="s-btn danger" onClick={() => deleteStop(stop.id)}>🗑 Remove</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+
+                {stops.length === 0 && (
+                  <div className="empty">
+                    <span className="empty-icon">🗓</span>
+                    <div className="empty-text">No stops planned yet.<br/>Add addresses from estatesales.net,<br/>Facebook, or Craigslist above.</div>
+                  </div>
+                )}
+
+              </div>
+            </div>
+          )}
+
+          {/* ══════════ MAP TAB ══════════ */}
+          {activeTab === "map" && (
+            <div className="page map-page">
+              <div className="map-wrap" ref={mapRef}>
+                <iframe key={mapSrc} className="map-iframe" src={mapSrc} title="FlipScout Map" scrolling="no" />
+
+                {bounds && (
+                  <svg className="pin-svg" viewBox={`0 0 ${mapSize.w} ${mapSize.h}`}>
+                    {userPos && (() => {
+                      const {x,y} = projectPin(userPos.lat,userPos.lng,bounds,mapSize.w,mapSize.h);
+                      return <g><circle cx={x} cy={y} r={12} fill="rgba(96,165,250,0.2)"/><circle cx={x} cy={y} r={6} fill="#60a5fa" stroke="#fff" strokeWidth="2"/></g>;
+                    })()}
+
+                    {/* Planned stops — diamond shapes */}
+                    {stops.filter(s=>s.lat&&s.lng).map(stop => {
+                      const {x,y} = projectPin(stop.lat,stop.lng,bounds,mapSize.w,mapSize.h);
+                      const st  = STOP_TYPES[stop.type]||STOP_TYPES.garage;
+                      const ms  = STOP_STATUS[stop.status]||STOP_STATUS.pending;
+                      const col = stop.status==="pending"?st.color:ms.color;
+                      return (
+                        <g key={stop.id} style={{pointerEvents:"all",cursor:"pointer"}} onClick={() => { setActiveTab("plan"); setExpandedId(stop.id); }}>
+                          <ellipse cx={x} cy={y+16} rx={5} ry={2.5} fill="rgba(0,0,0,0.3)"/>
+                          <path d={`M${x},${y+16} C${x-5},${y+8} ${x-11},${y-1} ${x-11},${y-9} A11,11 0 1,1 ${x+11},${y-9} C${x+11},${y-1} ${x+5},${y+8} ${x},${y+16}Z`} fill={col} stroke="#fff" strokeWidth="1.8"/>
+                          <text x={x} y={y-5} textAnchor="middle" dominantBaseline="middle" fontSize="10">{st.emoji}</text>
+                        </g>
+                      );
+                    })}
+
+                    {/* On-the-fly pins — circles */}
+                    {mapPins.map(pin => {
+                      const {x,y} = projectPin(pin.lat,pin.lng,bounds,mapSize.w,mapSize.h);
+                      const col = STOP_STATUS[pin.status]?.color??"#f59e0b";
+                      return (
+                        <g key={pin.id} style={{pointerEvents:"all",cursor:"pointer"}} onClick={() => { setEditPin(pin); setMapSheet("editPin"); }}>
+                          <ellipse cx={x} cy={y+13} rx={4} ry={2} fill="rgba(0,0,0,0.3)"/>
+                          <circle cx={x} cy={y} r={9} fill={col} stroke="#fff" strokeWidth="1.5"/>
+                          <text x={x} y={y} textAnchor="middle" dominantBaseline="middle" fontSize="9">{STOP_STATUS[pin.status]?.emoji??"📍"}</text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                )}
+
+                <div className="map-legend">
+                  {Object.entries(STOP_STATUS).map(([k,v]) => (
+                    <div className="legend-row" key={k}><div className="legend-dot" style={{background:v.color}}/>{v.label}</div>
+                  ))}
+                  <div style={{height:1,background:"#2a2a3a",margin:"3px 0"}}/>
+                  <div className="legend-row" style={{fontSize:9,color:"rgba(255,255,255,0.3)"}}>Pin shapes = planned</div>
+                  <div className="legend-row" style={{fontSize:9,color:"rgba(255,255,255,0.3)"}}>Circles = on-the-fly</div>
+                </div>
+
+                {mapPins.length > 0 && (
+                  <button className="map-clear-btn" onClick={() => { if(window.confirm("Clear on-the-fly pins?")) setMapPins([]); }}>Clear pins</button>
+                )}
+
+                <div className="gps-pill"><div className={`gps-dot ${gpsReady?"on":""}`}/>{gpsReady?"GPS ready":"No GPS"}</div>
+
+                <div className="mark-wrap">
+                  <button className="mark-btn" onClick={handleMark}>
+                    <span className="mark-icon">📍</span>
+                    <span className="mark-label">MARK</span>
+                  </button>
+                  <span className="mark-hint">{gpsReady?"Tap to mark this house":"Tap to enter address"}</span>
+                </div>
+
+                {scheduled.length > 0 && (
+                  <div className="map-strip">
+                    <div className="map-strip-label">TODAY'S PLANNED STOPS</div>
+                    <div className="map-strip-list">
+                      {scheduled.map(stop => {
+                        const isNow = stop.arriveAt<=nowMins&&nowMins<stop.leaveAt;
+                        const isDone = stop.status==="visited"||stop.status==="skip";
+                        return (
+                          <div key={stop.id} className={`strip-stop ${isNow?"is-now":""} ${isDone?"is-done":""}`}
+                            onClick={() => { setActiveTab("plan"); setExpandedId(stop.id); }}
+                          >
+                            <div className="strip-name">{STOP_TYPES[stop.type]?.emoji} {stop.name}</div>
+                            <div className="strip-meta">
+                              <span className="strip-time">{minsToTime(stop.arriveAt)}</span>
+                              <span style={{fontSize:12}}>{STOP_STATUS[stop.status]?.emoji??"📍"}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Mark sheet */}
+              {mapSheet === "new" && (
+                <div className="backdrop" onClick={e=>e.target===e.currentTarget&&setMapSheet(null)}>
+                  <div className="sheet">
+                    <div className="sheet-handle"/>
+                    <div className="sheet-title">MARK THIS HOUSE</div>
+                    <div className="sheet-status-row">
+                      {Object.entries(STOP_STATUS).map(([k,v]) => (
+                        <button key={k} className="sh-status-btn" style={{borderColor:v.color,color:v.color}} onClick={()=>confirmPin(k)}>
+                          <span className="sh-status-emoji">{v.emoji}</span>
+                          <span className="sh-status-label">{v.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Edit pin sheet */}
+              {mapSheet === "editPin" && editPin && (
+                <div className="backdrop" onClick={e=>e.target===e.currentTarget&&setMapSheet(null)}>
+                  <div className="sheet">
+                    <div className="sheet-handle"/>
+                    <div className="sheet-title">UPDATE THIS HOUSE</div>
+                    <div className="sheet-status-row">
+                      {Object.entries(STOP_STATUS).map(([k,v]) => (
+                        <button key={k} className="sh-status-btn"
+                          style={{borderColor:v.color,color:v.color,background:editPin.status===k?v.color+"22":"none"}}
+                          onClick={()=>updatePin(editPin.id,k)}
+                        >
+                          <span className="sh-status-emoji">{v.emoji}</span>
+                          <span className="sh-status-label">{v.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <button className="sh-del-btn" onClick={()=>deletePin(editPin.id)}>🗑 Remove this pin</button>
+                  </div>
+                </div>
+              )}
+
+              {/* No GPS sheet */}
+              {mapSheet === "noGps" && (
+                <div className="backdrop" onClick={e=>e.target===e.currentTarget&&setMapSheet(null)}>
+                  <div className="sheet">
+                    <div className="sheet-handle"/>
+                    <div className="no-gps-title">GPS not available</div>
+                    <div className="no-gps-sub">Enable location in your browser settings, or type an address to drop a pin manually.</div>
+                    <input className="addr-input" placeholder="123 Oak St, Birmingham AL" value={manualAddr} onChange={e=>setManual(e.target.value)} onKeyDown={e=>e.key==="Enter"&&geocodeManual()} autoFocus />
+                    <button className="primary-btn" onClick={geocodeManual} disabled={geocoding||!manualAddr.trim()}>{geocoding?"Finding…":"Drop Pin Here"}</button>
+                    <button className="cancel-btn" onClick={()=>setMapSheet(null)}>Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* BOTTOM NAV */}
         <nav className="bottom-nav">
-          <button className={`nav-btn ${activeTab==="scout"?"active":""}`} onClick={() => setActiveTab("scout")}>
-            <span className="nav-icon">🔍</span>
-            <span className="nav-label">FLIPSCOUT</span>
+          <button className={`nav-btn ${activeTab==="plan"?"active":""}`} onClick={()=>setActiveTab("plan")}>
+            <span className="nav-icon">📋</span>
+            <span className="nav-label">PLAN</span>
           </button>
-          <button className={`nav-btn map-tab ${activeTab==="map"?"active":""}`} onClick={() => setActiveTab("map")}>
+          <button className={`nav-btn ${activeTab==="map"?"map-active":""}`} onClick={()=>setActiveTab("map")}>
             <span className="nav-icon">🗺️</span>
-            <span className="nav-label">SALEMAP</span>
+            <span className="nav-label">MAP</span>
           </button>
         </nav>
+
+        {/* Paste modal */}
+        {pasteModal && (
+          <div className="backdrop" onClick={e=>e.target===e.currentTarget&&setPasteModal(false)}>
+            <div className="sheet">
+              <div className="sheet-handle"/>
+              <div style={{fontSize:17,fontWeight:700,color:"var(--text)",marginBottom:6}}>Paste Addresses</div>
+              <div style={{fontFamily:"'DM Mono',monospace",fontSize:12,color:"var(--muted)",lineHeight:1.6,marginBottom:14}}>
+                One address per line. Works great with estatesales.net, Facebook Marketplace, or Craigslist.
+              </div>
+              <textarea className="paste-area" rows={7}
+                placeholder={"123 Oak St, Birmingham AL\n456 Maple Ave, Hoover AL\n789 Pine Rd, Vestavia AL"}
+                value={pasteText} onChange={e=>setPasteText(e.target.value)} autoFocus
+              />
+              <div className="modal-actions">
+                <button className="ghost-btn" onClick={()=>setPasteModal(false)}>Cancel</button>
+                <button className="primary-btn" style={{flex:1}} onClick={handlePaste} disabled={pasting||!pasteText.trim()}>
+                  {pasting?"Adding…":`Add ${pasteText.split("\n").filter(l=>l.trim().length>5).length} Stops`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {toast && <div className="toast">{toast}</div>}
       </div>
     </>
   );
