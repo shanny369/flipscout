@@ -40,7 +40,10 @@ async function sbFetch(path, opts = {}) {
 
 async function geocode(address) {
   try {
-    const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`);
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=us`,
+      { headers: { "Accept-Language": "en", "User-Agent": "FlipScout/1.0" } }
+    );
     const d = await r.json();
     if (d[0]) return { lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) };
   } catch {}
@@ -317,6 +320,166 @@ const STYLES = `
 `;
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// LEAFLET MAP COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════════
+function LeafletMap({ userPos, gpsReady, stops, mapPins, nowMins, onMarkClick, onStopClick, onPinClick, onClearPins }) {
+  const mapDivRef = useRef(null);
+  const leafletRef = useRef(null);
+  const markersRef = useRef([]);
+  const userMarkerRef = useRef(null);
+
+  // Init map once
+  useEffect(() => {
+    if (leafletRef.current || !mapDivRef.current) return;
+
+    // Load Leaflet CSS
+    if (!document.getElementById("leaflet-css")) {
+      const link = document.createElement("link");
+      link.id = "leaflet-css";
+      link.rel = "stylesheet";
+      link.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+      document.head.appendChild(link);
+    }
+
+    // Load Leaflet JS then init
+    const initMap = () => {
+      const L = window.L;
+      if (!L || !mapDivRef.current) return;
+
+      const center = userPos ? [userPos.lat, userPos.lng] : [33.4, -86.8];
+      const map = L.map(mapDivRef.current, { zoomControl: true, attributionControl: false }).setView(center, 15);
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+      }).addTo(map);
+
+      leafletRef.current = map;
+    };
+
+    if (window.L) {
+      initMap();
+    } else {
+      const script = document.createElement("script");
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+      script.onload = initMap;
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      if (leafletRef.current) { leafletRef.current.remove(); leafletRef.current = null; }
+    };
+  }, []);
+
+  // Update user position marker
+  useEffect(() => {
+    const L = window.L;
+    const map = leafletRef.current;
+    if (!L || !map || !userPos) return;
+
+    if (userMarkerRef.current) { userMarkerRef.current.setLatLng([userPos.lat, userPos.lng]); }
+    else {
+      const icon = L.divIcon({ html: '<div style="width:14px;height:14px;border-radius:50%;background:#60a5fa;border:2px solid #fff;box-shadow:0 0 6px rgba(96,165,250,0.6)"></div>', iconSize:[14,14], iconAnchor:[7,7], className:"" });
+      userMarkerRef.current = L.marker([userPos.lat, userPos.lng], { icon }).addTo(map);
+      map.setView([userPos.lat, userPos.lng], 16);
+    }
+  }, [userPos]);
+
+  // Update stop + pin markers
+  useEffect(() => {
+    const L = window.L;
+    const map = leafletRef.current;
+    if (!L || !map) return;
+
+    // Clear old markers
+    markersRef.current.forEach(m => map.removeLayer(m));
+    markersRef.current = [];
+
+    // Add planned stop markers
+    stops.filter(s => s.lat && s.lng).forEach(stop => {
+      const st = STOP_TYPES[stop.type] || STOP_TYPES.garage;
+      const ms = STOP_STATUS[stop.status] || STOP_STATUS.pending;
+      const col = stop.status === "pending" ? st.color : ms.color;
+      const icon = L.divIcon({
+        html: `<div style="width:32px;height:36px;position:relative;cursor:pointer">
+          <svg width="32" height="36" viewBox="0 0 32 36">
+            <path d="M16,34 C11,26 4,22 4,14 A12,12 0 1,1 28,14 C28,22 21,26 16,34Z" fill="${col}" stroke="white" stroke-width="2"/>
+            <text x="16" y="15" text-anchor="middle" dominant-baseline="middle" font-size="11">${st.emoji}</text>
+          </svg>
+        </div>`,
+        iconSize: [32,36], iconAnchor: [16,34], className: ""
+      });
+      const marker = L.marker([stop.lat, stop.lng], { icon }).addTo(map);
+      marker.on("click", () => onStopClick(stop));
+      markersRef.current.push(marker);
+    });
+
+    // Add on-the-fly pin markers
+    mapPins.forEach(pin => {
+      const col = STOP_STATUS[pin.status]?.color ?? "#f59e0b";
+      const emoji = STOP_STATUS[pin.status]?.emoji ?? "📍";
+      const icon = L.divIcon({
+        html: `<div style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid white;display:flex;align-items:center;justify-content:center;font-size:11px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.4)">${emoji}</div>`,
+        iconSize: [26,26], iconAnchor: [13,13], className: ""
+      });
+      const marker = L.marker([pin.lat, pin.lng], { icon }).addTo(map);
+      marker.on("click", () => onPinClick(pin));
+      markersRef.current.push(marker);
+    });
+  }, [stops, mapPins]);
+
+  return (
+    <div style={{ flex:1, position:"relative", overflow:"hidden", minHeight:0, display:"flex", flexDirection:"column" }}>
+      <div ref={mapDivRef} style={{ flex:1, minHeight:0 }} />
+
+      {/* Legend */}
+      <div className="map-legend">
+        {Object.entries(STOP_STATUS).map(([k,v]) => (
+          <div className="legend-row" key={k}><div className="legend-dot" style={{background:v.color}}/>{v.label}</div>
+        ))}
+        <div style={{height:1,background:"#2a2a3a",margin:"3px 0"}}/>
+        <div className="legend-row" style={{fontSize:9,color:"rgba(255,255,255,0.3)"}}>Pins = planned</div>
+        <div className="legend-row" style={{fontSize:9,color:"rgba(255,255,255,0.3)"}}>Circles = on-the-fly</div>
+      </div>
+
+      {mapPins.length > 0 && (
+        <button className="map-clear-btn" onClick={onClearPins}>Clear pins</button>
+      )}
+
+      <div className="gps-pill"><div className={`gps-dot ${gpsReady?"on":""}`}/>{gpsReady?"GPS ready":"No GPS"}</div>
+
+      <div className="mark-wrap">
+        <button className="mark-btn" onClick={onMarkClick}>
+          <span className="mark-icon">📍</span>
+          <span className="mark-label">MARK</span>
+        </button>
+        <span className="mark-hint">{gpsReady?"Tap to mark this house":"Tap to enter address"}</span>
+      </div>
+
+      {stops.length > 0 && (
+        <div className="map-strip">
+          <div className="map-strip-label">TODAY'S PLANNED STOPS</div>
+          <div className="map-strip-list">
+            {stops.map(stop => {
+              const isNow = stop.arriveAt<=nowMins&&nowMins<stop.leaveAt;
+              const isDone = stop.status==="visited"||stop.status==="skip";
+              return (
+                <div key={stop.id} className={`strip-stop ${isNow?"is-now":""} ${isDone?"is-done":""}`} onClick={() => onStopClick(stop)}>
+                  <div className="strip-name">{STOP_TYPES[stop.type]?.emoji} {stop.name}</div>
+                  <div className="strip-meta">
+                    <span className="strip-time">{minsToTime(stop.arriveAt)}</span>
+                    <span style={{fontSize:12}}>{STOP_STATUS[stop.status]?.emoji??"📍"}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // APP
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function App() {
@@ -346,9 +509,9 @@ export default function App() {
   const [pendingPos, setPending]      = useState(null);
   const [manualAddr, setManual]       = useState("");
   const [geocoding, setGeocoding]     = useState(false);
-  const [mapSize, setMapSize]         = useState({ w: 390, h: 500 });
+
   const [nowMins, setNowMins]         = useState(getNowMins());
-  const mapRef   = useRef(null);
+
   const watchId  = useRef(null);
   const pollRef  = useRef(null);
   const clockRef = useRef(null);
@@ -380,12 +543,6 @@ export default function App() {
   }, [loadStops]);
 
   useEffect(() => { try { localStorage.setItem(`fs_${sessionDate}`, JSON.stringify(stops)); } catch {} }, [stops, sessionDate]);
-
-  // Map size
-  useEffect(() => {
-    const m = () => mapRef.current && setMapSize({ w: mapRef.current.offsetWidth, h: mapRef.current.offsetHeight });
-    m(); window.addEventListener("resize", m); return () => window.removeEventListener("resize", m);
-  }, []);
 
   // GPS
   useEffect(() => {
@@ -486,34 +643,6 @@ export default function App() {
   } else if (stops.length > 0 && pendingStops.length === 0) {
     dayStatus = { type: "ahead", msg: "All stops done! 🎉" };
   }
-
-  // Map — always center on GPS if available, otherwise use stops
-  const pad = 0.012;
-  const allGeo = [...stops, ...mapPins].filter(s => s.lat && s.lng);
-
-  let mapSrc;
-  if (userPos) {
-    // GPS is ready — always center on user, show ~1 mile around them
-    mapSrc = `https://www.openstreetmap.org/export/embed.html?bbox=${userPos.lng-pad},${userPos.lat-pad},${userPos.lng+pad},${userPos.lat+pad}&layer=mapnik`;
-  } else if (allGeo.length > 0) {
-    // No GPS but have geocoded stops — center on them
-    const lats = allGeo.map(s => s.lat);
-    const lngs = allGeo.map(s => s.lng);
-    const minLat = Math.min(...lats)-pad, maxLat = Math.max(...lats)+pad;
-    const minLng = Math.min(...lngs)-pad, maxLng = Math.max(...lngs)+pad;
-    mapSrc = `https://www.openstreetmap.org/export/embed.html?bbox=${minLng},${minLat},${maxLng},${maxLat}&layer=mapnik`;
-  } else {
-    // Fallback to Hoover AL
-    mapSrc = `https://www.openstreetmap.org/export/embed.html?bbox=-86.85,33.35,-86.65,33.55&layer=mapnik`;
-  }
-
-  // Bounds still needed for SVG pin overlay
-  const allLats = [...allGeo.map(s => s.lat), userPos?.lat].filter(Boolean);
-  const allLngs = [...allGeo.map(s => s.lng), userPos?.lng].filter(Boolean);
-  const bounds = allLats.length ? {
-    minLat: Math.min(...allLats)-pad, maxLat: Math.max(...allLats)+pad,
-    minLng: Math.min(...allLngs)-pad, maxLng: Math.max(...allLngs)+pad,
-  } : null;
 
   const total   = stops.length;
   const visited = stops.filter(s => s.status==="visited").length;
@@ -708,7 +837,7 @@ export default function App() {
                               </div>
                               <textarea className="stop-notes-input" rows={2} placeholder="Notes… (e.g. lots of tools, cash only, Pete says good stuff)" value={stop.notes||""} onChange={e => updateStop(stop.id,{notes:e.target.value})} />
                               <div className="stop-actions">
-                                <button className="s-btn nav-btn-s" onClick={() => window.open(`https://maps.apple.com/?q=${encodeURIComponent(stop.address)}`,"_blank")}>🧭 Navigate</button>
+                                <button className="s-btn nav-btn-s" onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.address)}`,"_blank")}>🧭 Navigate</button>
                                 <button className="s-btn" onClick={() => { navigator.clipboard?.writeText(stop.address); showToast("Copied!"); }}>📋 Copy</button>
                                 <button className="s-btn danger" onClick={() => deleteStop(stop.id)}>🗑 Remove</button>
                               </div>
@@ -734,92 +863,17 @@ export default function App() {
           {/* ══════════ MAP TAB ══════════ */}
           {activeTab === "map" && (
             <div className="page map-page">
-              <div className="map-wrap" ref={mapRef}>
-                <iframe key={mapSrc} className="map-iframe" src={mapSrc} title="FlipScout Map" scrolling="no" />
-
-                {bounds && (
-                  <svg className="pin-svg" viewBox={`0 0 ${mapSize.w} ${mapSize.h}`}>
-                    {userPos && (() => {
-                      const {x,y} = projectPin(userPos.lat,userPos.lng,bounds,mapSize.w,mapSize.h);
-                      return <g><circle cx={x} cy={y} r={12} fill="rgba(96,165,250,0.2)"/><circle cx={x} cy={y} r={6} fill="#60a5fa" stroke="#fff" strokeWidth="2"/></g>;
-                    })()}
-
-                    {/* Planned stops — diamond shapes */}
-                    {stops.filter(s=>s.lat&&s.lng).map(stop => {
-                      const {x,y} = projectPin(stop.lat,stop.lng,bounds,mapSize.w,mapSize.h);
-                      const st  = STOP_TYPES[stop.type]||STOP_TYPES.garage;
-                      const ms  = STOP_STATUS[stop.status]||STOP_STATUS.pending;
-                      const col = stop.status==="pending"?st.color:ms.color;
-                      return (
-                        <g key={stop.id} style={{pointerEvents:"all",cursor:"pointer"}} onClick={() => { setActiveTab("plan"); setExpandedId(stop.id); }}>
-                          <ellipse cx={x} cy={y+16} rx={5} ry={2.5} fill="rgba(0,0,0,0.3)"/>
-                          <path d={`M${x},${y+16} C${x-5},${y+8} ${x-11},${y-1} ${x-11},${y-9} A11,11 0 1,1 ${x+11},${y-9} C${x+11},${y-1} ${x+5},${y+8} ${x},${y+16}Z`} fill={col} stroke="#fff" strokeWidth="1.8"/>
-                          <text x={x} y={y-5} textAnchor="middle" dominantBaseline="middle" fontSize="10">{st.emoji}</text>
-                        </g>
-                      );
-                    })}
-
-                    {/* On-the-fly pins — circles */}
-                    {mapPins.map(pin => {
-                      const {x,y} = projectPin(pin.lat,pin.lng,bounds,mapSize.w,mapSize.h);
-                      const col = STOP_STATUS[pin.status]?.color??"#f59e0b";
-                      return (
-                        <g key={pin.id} style={{pointerEvents:"all",cursor:"pointer"}} onClick={() => { setEditPin(pin); setMapSheet("editPin"); }}>
-                          <ellipse cx={x} cy={y+13} rx={4} ry={2} fill="rgba(0,0,0,0.3)"/>
-                          <circle cx={x} cy={y} r={9} fill={col} stroke="#fff" strokeWidth="1.5"/>
-                          <text x={x} y={y} textAnchor="middle" dominantBaseline="middle" fontSize="9">{STOP_STATUS[pin.status]?.emoji??"📍"}</text>
-                        </g>
-                      );
-                    })}
-                  </svg>
-                )}
-
-                <div className="map-legend">
-                  {Object.entries(STOP_STATUS).map(([k,v]) => (
-                    <div className="legend-row" key={k}><div className="legend-dot" style={{background:v.color}}/>{v.label}</div>
-                  ))}
-                  <div style={{height:1,background:"#2a2a3a",margin:"3px 0"}}/>
-                  <div className="legend-row" style={{fontSize:9,color:"rgba(255,255,255,0.3)"}}>Pin shapes = planned</div>
-                  <div className="legend-row" style={{fontSize:9,color:"rgba(255,255,255,0.3)"}}>Circles = on-the-fly</div>
-                </div>
-
-                {mapPins.length > 0 && (
-                  <button className="map-clear-btn" onClick={() => { if(window.confirm("Clear on-the-fly pins?")) setMapPins([]); }}>Clear pins</button>
-                )}
-
-                <div className="gps-pill"><div className={`gps-dot ${gpsReady?"on":""}`}/>{gpsReady?"GPS ready":"No GPS"}</div>
-
-                <div className="mark-wrap">
-                  <button className="mark-btn" onClick={handleMark}>
-                    <span className="mark-icon">📍</span>
-                    <span className="mark-label">MARK</span>
-                  </button>
-                  <span className="mark-hint">{gpsReady?"Tap to mark this house":"Tap to enter address"}</span>
-                </div>
-
-                {scheduled.length > 0 && (
-                  <div className="map-strip">
-                    <div className="map-strip-label">TODAY'S PLANNED STOPS</div>
-                    <div className="map-strip-list">
-                      {scheduled.map(stop => {
-                        const isNow = stop.arriveAt<=nowMins&&nowMins<stop.leaveAt;
-                        const isDone = stop.status==="visited"||stop.status==="skip";
-                        return (
-                          <div key={stop.id} className={`strip-stop ${isNow?"is-now":""} ${isDone?"is-done":""}`}
-                            onClick={() => { setActiveTab("plan"); setExpandedId(stop.id); }}
-                          >
-                            <div className="strip-name">{STOP_TYPES[stop.type]?.emoji} {stop.name}</div>
-                            <div className="strip-meta">
-                              <span className="strip-time">{minsToTime(stop.arriveAt)}</span>
-                              <span style={{fontSize:12}}>{STOP_STATUS[stop.status]?.emoji??"📍"}</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <LeafletMap
+                userPos={userPos}
+                gpsReady={gpsReady}
+                stops={scheduled}
+                mapPins={mapPins}
+                nowMins={nowMins}
+                onMarkClick={handleMark}
+                onStopClick={(stop) => { setActiveTab("plan"); setExpandedId(stop.id); }}
+                onPinClick={(pin) => { setEditPin(pin); setMapSheet("editPin"); }}
+                onClearPins={() => { if(window.confirm("Clear on-the-fly pins?")) setMapPins([]); }}
+              />
 
               {/* Mark sheet */}
               {mapSheet === "new" && (
