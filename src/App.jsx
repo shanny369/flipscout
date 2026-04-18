@@ -340,7 +340,7 @@ const STYLES = `
   .sheet-handle { width: 36px; height: 4px; background: #2a2a3a; border-radius: 2px; margin: 0 auto 16px; }
   .sheet-title { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); letter-spacing: 2px; text-align: center; margin-bottom: 14px; }
   .sheet-status-row { display: flex; gap: 9px; }
-  .sh-btn { flex: 1; padding: 13px 4px; border-radius: 11px; border: 2px solid; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 5px; transition: transform 0.1s; }
+  .sh-btn { flex: 1; padding: 13px 4px; border-radius: 11px; border: 2px solid; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; transition: transform 0.1s; }
   .sh-btn:active { transform: scale(0.94); }
   .sh-emoji { font-size: 24px; line-height: 1; }
   .sh-label { font-family: 'DM Mono', monospace; font-size: 10px; }
@@ -697,7 +697,7 @@ export default function App() {
   };
 
   // Map
-  const handleMark = () => { if (gpsReady && userPos) { setPending(userPos); setMapSheet("new"); } else setMapSheet("noGps"); };
+  const handleMark = () => { setMapSheet("pickLocation"); };
   const confirmPin = (status) => { if (!pendingPos) return; setMapPins(p => [...p, { id: Date.now(), ...pendingPos, status }]); setMapSheet(null); setPending(null); showToast(`${STOP_STATUS[status]?.emoji} Marked`); };
   const geocodeManual = async () => {
     if (!manualAddr.trim()) return;
@@ -964,6 +964,32 @@ export default function App() {
                 onPinClick={(pin) => { setEditPin(pin); setMapSheet("editPin"); }}
                 onClearPins={() => { if(window.confirm("Clear on-the-fly pins?")) setMapPins([]); }}
               />
+
+              {mapSheet === "pickLocation" && (
+                <div className="backdrop" onClick={e=>e.target===e.currentTarget&&setMapSheet(null)}>
+                  <div className="sheet">
+                    <div className="sheet-handle"/>
+                    <div className="sheet-title">WHERE IS THIS HOUSE?</div>
+                    <div style={{display:"flex",gap:10,marginBottom:8}}>
+                      <button className="sh-btn" style={{borderColor:"#f59e0b",color:"#f59e0b",flex:1,padding:"18px 8px"}}
+                        onClick={() => {
+                          if (gpsReady && userPos) { setPending(userPos); setMapSheet("new"); }
+                          else setMapSheet("noGps");
+                        }}>
+                        <span className="sh-emoji">📍</span>
+                        <span className="sh-label">HERE</span>
+                        <span style={{fontFamily:"'DM Mono',monospace",fontSize:9,color:"rgba(245,158,11,0.6)",marginTop:2}}>current location</span>
+                      </button>
+                      <button className="sh-btn" style={{borderColor:"#60a5fa",color:"#60a5fa",flex:1,padding:"18px 8px"}}
+                        onClick={() => setMapSheet("noGps")}>
+                        <span className="sh-emoji">🗺️</span>
+                        <span className="sh-label">PAST SPOT</span>
+                        <span style={{fontFamily:"'DM Mono',monospace",fontSize:9,color:"rgba(96,165,250,0.6)",marginTop:2}}>enter address</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {mapSheet === "new" && (
                 <div className="backdrop" onClick={e=>e.target===e.currentTarget&&setMapSheet(null)}>
