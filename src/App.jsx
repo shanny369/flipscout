@@ -549,6 +549,8 @@ export default function App() {
   const [newOpen, setNewOpen]   = useState("");
   const [newClose, setNewClose] = useState("");
   const [adding, setAdding]     = useState(false);
+  const [showDone, setShowDone] = useState(false);
+  const expandedRef = useRef(null);
 
   // Paste modal
   const [pasteModal, setPasteModal] = useState(false);
@@ -571,6 +573,11 @@ export default function App() {
   const clockRef = useRef(null);
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2300); };
+
+  const expandStop = (stop) => {
+    setExpandedId(stop.id);
+    if (stop.status !== "pending") setShowDone(true);
+  };
 
   useEffect(() => { clockRef.current = setInterval(() => setNowMins(getNowMins()), 60000); return () => clearInterval(clockRef.current); }, []);
 
@@ -871,15 +878,20 @@ export default function App() {
                       </div>
                     </div>
 
-                    {scheduled.map((stop, idx) => {
+                    {(() => {
+                      const activeStops = scheduled.filter(s => s.status === "pending");
+                      const doneStops   = scheduled.filter(s => s.status !== "pending");
+                      return (<>
+                      {activeStops.map((stop) => {
+                      const realIdx = scheduled.findIndex(s => s.id === stop.id);
                       const st     = STOP_TYPES[stop.type] || STOP_TYPES.garage;
                       const ms     = STOP_STATUS[stop.status] || STOP_STATUS.pending;
                       const isOpen = expandedId === stop.id;
                       const tooEarly = stop.open_time && stop.arriveAt < timeToMins(stop.open_time);
                       return (
                         <div key={stop.id} className={`stop-card ${stop.status}`} style={{ borderColor:isOpen?st.color+"55":undefined }}>
-                          <div className="stop-main" onClick={() => setExpandedId(isOpen?null:stop.id)}>
-                            <div className="stop-order-num">{idx+1}</div>
+                          <div className="stop-main" onClick={() => isOpen ? setExpandedId(null) : expandStop(stop)}>
+                            <div className="stop-order-num">{realIdx+1}</div>
                             <div className="stop-emoji">{st.emoji}</div>
                             <div className="stop-info">
                               <div className="stop-name">{stop.name}</div>
@@ -936,6 +948,55 @@ export default function App() {
                         </div>
                       );
                     })}
+                    {doneStops.length > 0 && (
+                      <>
+                        <button onClick={() => setShowDone(p=>!p)} style={{ width:"100%", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 14px", color:"var(--muted)", fontFamily:"'DM Mono',monospace", fontSize:11, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"space-between", letterSpacing:0.5 }}>
+                          <span>✅ {doneStops.length} {doneStops.length===1?"stop":"stops"} done</span>
+                          <span>{showDone?"▲":"▼"}</span>
+                        </button>
+                        {showDone && doneStops.map((stop) => {
+                          const realIdx = scheduled.findIndex(s => s.id === stop.id);
+                          const st     = STOP_TYPES[stop.type] || STOP_TYPES.garage;
+                          const ms     = STOP_STATUS[stop.status] || STOP_STATUS.pending;
+                          const isOpen = expandedId === stop.id;
+                          const tooEarly = stop.open_time && stop.arriveAt < timeToMins(stop.open_time);
+                          return (
+                            <div key={stop.id} className={`stop-card ${stop.status}`} style={{ borderColor:isOpen?st.color+"55":undefined, opacity:0.7 }}>
+                              <div className="stop-main" onClick={() => isOpen ? setExpandedId(null) : expandStop(stop)}>
+                                <div className="stop-order-num">{realIdx+1}</div>
+                                <div className="stop-emoji">{st.emoji}</div>
+                                <div className="stop-info">
+                                  <div className="stop-name">{stop.name}</div>
+                                  <div className="stop-addr">{stop.address}</div>
+                                  <div className="stop-pills">
+                                    <span className="pill pill-time">{minsToTime(stop.arriveAt)}</span>
+                                    <span className="pill pill-status" style={{ background:ms.color+"22", color:ms.color }}>{ms.emoji} {ms.label}</span>
+                                  </div>
+                                </div>
+                                <span className={`stop-chevron ${isOpen?"open":""}`}>›</span>
+                              </div>
+                              {isOpen && (
+                                <div className="stop-expanded">
+                                  <div className="status-btns">
+                                    {Object.entries(STOP_STATUS).map(([k,v]) => (
+                                      <button key={k} className="status-btn" style={{ borderColor:v.color, color:v.color, background:stop.status===k?v.color+"22":"none" }} onClick={() => updateStop(stop.id,{status:k})}>
+                                        <span className="status-btn-emoji">{v.emoji}</span>
+                                        <span className="status-btn-label">{v.label}</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <div className="stop-actions">
+                                    <button className="s-btn nav-s" onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.address)}`,"_blank")}>🧭 Navigate</button>
+                                    <button className="s-btn danger" onClick={() => deleteStop(stop.id)}>🗑 Remove</button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                    </>);})()}
                   </>
                 )}
 
@@ -960,7 +1021,7 @@ export default function App() {
                 mapPins={mapPins}
                 nowMins={nowMins}
                 onMarkClick={handleMark}
-                onStopClick={(stop) => { setActiveTab("plan"); setExpandedId(stop.id); }}
+                onStopClick={(stop) => { setActiveTab("plan"); expandStop(stop); }}
                 onPinClick={(pin) => { setEditPin(pin); setMapSheet("editPin"); }}
                 onClearPins={() => { if(window.confirm("Clear on-the-fly pins?")) setMapPins([]); }}
               />
