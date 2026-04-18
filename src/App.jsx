@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -403,6 +402,7 @@ function LeafletMap({ userPos, gpsReady, stops, mapPins, nowMins, onMarkClick, o
     markersRef.current = [];
 
     // Add planned stop markers
+    console.log('LeafletMap stops with coords:', stops.filter(s => s.lat && s.lng).map(s => s.name + ' ' + s.lat + ',' + s.lng));
     stops.filter(s => s.lat && s.lng).forEach(stop => {
       const st = STOP_TYPES[stop.type] || STOP_TYPES.garage;
       const ms = STOP_STATUS[stop.status] || STOP_STATUS.pending;
