@@ -323,7 +323,7 @@ const STYLES = `
   .mark-icon { font-size: 22px; line-height: 1; }
   .mark-label { font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 600; color: #0c0c10; letter-spacing: 1px; }
   .mark-hint { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.4); background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 20px; backdrop-filter: blur(8px); }
-  .map-strip { position: absolute; bottom: 0; left: 0; right: 0; z-index: 100; background: rgba(10,10,14,0.96); border-top: 1px solid #2a2a3a; padding: 8px 10px 16px; backdrop-filter: blur(12px); height: 110px; }
+  .map-strip { position: absolute; bottom: 0; left: 0; right: 0; z-index: 200; background: rgba(10,10,14,0.97); border-top: 1px solid #2a2a3a; padding: 10px 12px 18px; backdrop-filter: blur(12px); }
   .map-strip-label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--muted); letter-spacing: 1.5px; margin-bottom: 7px; }
   .map-strip-list { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
   .strip-stop { flex-shrink: 0; min-width: 100px; max-width: 130px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 7px 9px; cursor: pointer; transition: border-color 0.15s; overflow: hidden; }
@@ -492,34 +492,36 @@ function LeafletMap({ userPos, gpsReady, stops, mapPins, nowMins, onMarkClick, o
       {mapPins.length > 0 && <button className="map-clear-btn" onClick={onClearPins}>Clear pins</button>}
       <div className="gps-pill"><div className={`gps-dot ${gpsReady?"on":""}`}/>{gpsReady?"GPS ready":"No GPS"}</div>
 
-      <div className="mark-wrap" style={{ bottom: 170, position: "absolute", left: "50%", transform: "translateX(-50%)", zIndex: 300, display: "flex", flexDirection: "column", alignItems: "center", gap: 7 }}>
-        <button className="mark-btn" onClick={onMarkClick}>
-          <span className="mark-icon">📍</span>
-          <span className="mark-label">MARK</span>
-        </button>
-        <span className="mark-hint">{gpsReady?"Tap to mark this house":"Tap to enter address"}</span>
-      </div>
-
-      {stops.length > 0 && (
-        <div className="map-strip">
-          <div className="map-strip-label">TODAY'S STOPS</div>
-          <div className="map-strip-list">
-            {stops.map(stop => {
-              const isNow = stop.arriveAt<=nowMins&&nowMins<stop.leaveAt;
-              const isDone = stop.status==="visited"||stop.status==="skip";
-              return (
-                <div key={stop.id} className={`strip-stop ${isNow?"is-now":""} ${isDone?"is-done":""}`} onClick={() => onStopClick(stop)}>
-                  <div className="strip-name">{STOP_TYPES[stop.type]?.emoji} {stop.name}</div>
-                  <div className="strip-meta">
-                    <span className="strip-time">{minsToTime(stop.arriveAt)}</span>
-                    <span style={{fontSize:11}}>{STOP_STATUS[stop.status]?.emoji??"📍"}</span>
-                  </div>
-                </div>
-              );
-            })}
+      <div className="map-strip">
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <button className="mark-btn" onClick={onMarkClick}>
+            <span className="mark-icon">📍</span>
+            <span className="mark-label">MARK</span>
+          </button>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontFamily:"'DM Mono',monospace",fontSize:9,color:"var(--muted)",letterSpacing:1,marginBottom:6}}>
+              {gpsReady?"TAP TO MARK THIS HOUSE":"NO GPS — TAP TO ENTER ADDRESS"}
+            </div>
+            {stops.length > 0 && (
+              <div className="map-strip-list">
+                {stops.map(stop => {
+                  const isNow = stop.arriveAt<=nowMins&&nowMins<stop.leaveAt;
+                  const isDone = stop.status==="visited"||stop.status==="skip";
+                  return (
+                    <div key={stop.id} className={`strip-stop ${isNow?"is-now":""} ${isDone?"is-done":""}`} onClick={() => onStopClick(stop)}>
+                      <div className="strip-name">{STOP_TYPES[stop.type]?.emoji} {stop.name}</div>
+                      <div className="strip-meta">
+                        <span className="strip-time">{minsToTime(stop.arriveAt)}</span>
+                        <span style={{fontSize:11}}>{STOP_STATUS[stop.status]?.emoji??"📍"}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
