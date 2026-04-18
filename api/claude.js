@@ -7,12 +7,30 @@ export default async function handler(req, res) {
   if (type === "geocode") {
     try {
       const { address } = req.query;
+      // Try Nominatim first
       const r = await fetch(
         `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=us`,
         { headers: { "User-Agent": "FlipScout/1.0", "Accept-Language": "en" } }
       );
-      const d = await r.json();
-      return res.status(200).json(d);
+      if (r.ok) {
+        const d = await r.json();
+        if (d && d.length > 0) return res.status(200).json(d);
+      }
+      // Fallback to Photon geocoder
+      const r2 = await fetch(
+        `https://photon.komoot.io/api/?q=${encodeURIComponent(address)}&limit=1&lang=en`,
+        { headers: { "User-Agent": "FlipScout/1.0" } }
+      );
+      const d2 = await r2.json();
+      if (d2.features && d2.features.length > 0) {
+        const f = d2.features[0];
+        return res.status(200).json([{
+          lat: String(f.geometry.coordinates[1]),
+          lon: String(f.geometry.coordinates[0]),
+          display_name: f.properties.name
+        }]);
+      }
+      return res.status(200).json([]);
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }
