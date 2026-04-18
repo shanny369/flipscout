@@ -28,10 +28,7 @@ async function sbFetch(path, opts = {}) {
 
 async function geocode(address) {
   try {
-    const r = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=us`,
-      { headers: { "Accept-Language": "en" } }
-    );
+    const r = await fetch(`/api/claude?type=geocode&address=${encodeURIComponent(address)}`);
     const d = await r.json();
     if (d[0]) return { lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) };
   } catch {}
@@ -320,7 +317,7 @@ const STYLES = `
   .gps-dot { width: 6px; height: 6px; border-radius: 50%; background: #6b7280; }
   .gps-dot.on { background: #22c55e; animation: gpsPulse 1.6s ease-in-out infinite; }
   @keyframes gpsPulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-  .mark-wrap { position: absolute; bottom: 130px; left: 50%; transform: translateX(-50%); z-index: 100; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+  .mark-wrap { position: absolute; bottom: 160px; left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; align-items: center; gap: 7px; }
   .mark-btn { width: 68px; height: 68px; border-radius: 50%; background: var(--accent); border: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; box-shadow: 0 6px 24px rgba(245,158,11,0.5); transition: transform 0.1s; }
   .mark-btn:active { transform: scale(0.92); }
   .mark-icon { font-size: 22px; line-height: 1; }
@@ -466,7 +463,7 @@ function LeafletMap({ userPos, gpsReady, stops, mapPins, nowMins, onMarkClick, o
     Promise.all(stops.map(async s => {
       if (s.lat && s.lng) return s;
       try {
-        const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(s.address)}&format=json&limit=1&countrycodes=us`, { headers: { "Accept-Language": "en" } });
+        const r = await fetch(`/api/claude?type=geocode&address=${encodeURIComponent(s.address)}`);
         const d = await r.json();
         if (d[0]) return { ...s, lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) };
       } catch {}
@@ -495,7 +492,7 @@ function LeafletMap({ userPos, gpsReady, stops, mapPins, nowMins, onMarkClick, o
       {mapPins.length > 0 && <button className="map-clear-btn" onClick={onClearPins}>Clear pins</button>}
       <div className="gps-pill"><div className={`gps-dot ${gpsReady?"on":""}`}/>{gpsReady?"GPS ready":"No GPS"}</div>
 
-      <div className="mark-wrap">
+      <div className="mark-wrap" style={{ bottom: stops.length > 0 ? 160 : 30 }}>
         <button className="mark-btn" onClick={onMarkClick}>
           <span className="mark-icon">📍</span>
           <span className="mark-label">MARK</span>
@@ -704,7 +701,7 @@ export default function App() {
     if (!manualAddr.trim()) return;
     setGeocoding(true);
     try {
-      const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(manualAddr)}&format=json&limit=1&countrycodes=us`);
+      const r = await fetch(`/api/claude?type=geocode&address=${encodeURIComponent(manualAddr)}`);
       const d = await r.json();
       if (d[0]) { setPending({ lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) }); setManual(""); setMapSheet("new"); }
       else showToast("⚠️ Address not found");
