@@ -487,23 +487,33 @@ export default function App() {
     dayStatus = { type: "ahead", msg: "All stops done! 🎉" };
   }
 
-  // Map bounds — 0.015 degrees (~1 mile) padding so neighborhood houses show up
+  // Map — always center on GPS if available, otherwise use stops
+  const pad = 0.012;
   const allGeo = [...stops, ...mapPins].filter(s => s.lat && s.lng);
+
+  let mapSrc;
+  if (userPos) {
+    // GPS is ready — always center on user, show ~1 mile around them
+    mapSrc = `https://www.openstreetmap.org/export/embed.html?bbox=${userPos.lng-pad},${userPos.lat-pad},${userPos.lng+pad},${userPos.lat+pad}&layer=mapnik`;
+  } else if (allGeo.length > 0) {
+    // No GPS but have geocoded stops — center on them
+    const lats = allGeo.map(s => s.lat);
+    const lngs = allGeo.map(s => s.lng);
+    const minLat = Math.min(...lats)-pad, maxLat = Math.max(...lats)+pad;
+    const minLng = Math.min(...lngs)-pad, maxLng = Math.max(...lngs)+pad;
+    mapSrc = `https://www.openstreetmap.org/export/embed.html?bbox=${minLng},${minLat},${maxLng},${maxLat}&layer=mapnik`;
+  } else {
+    // Fallback to Hoover AL
+    mapSrc = `https://www.openstreetmap.org/export/embed.html?bbox=-86.85,33.35,-86.65,33.55&layer=mapnik`;
+  }
+
+  // Bounds still needed for SVG pin overlay
   const allLats = [...allGeo.map(s => s.lat), userPos?.lat].filter(Boolean);
   const allLngs = [...allGeo.map(s => s.lng), userPos?.lng].filter(Boolean);
-  const pad = 0.015;
   const bounds = allLats.length ? {
     minLat: Math.min(...allLats)-pad, maxLat: Math.max(...allLats)+pad,
     minLng: Math.min(...allLngs)-pad, maxLng: Math.max(...allLngs)+pad,
   } : null;
-
-  const fallbackSrc = userPos
-    ? `https://www.openstreetmap.org/export/embed.html?bbox=${userPos.lng-pad},${userPos.lat-pad},${userPos.lng+pad},${userPos.lat+pad}&layer=mapnik`
-    : `https://www.openstreetmap.org/export/embed.html?bbox=-86.85,33.35,-86.65,33.55&layer=mapnik`;
-
-  const mapSrc = bounds
-    ? `https://www.openstreetmap.org/export/embed.html?bbox=${bounds.minLng},${bounds.minLat},${bounds.maxLng},${bounds.maxLat}&layer=mapnik`
-    : fallbackSrc;
 
   const total   = stops.length;
   const visited = stops.filter(s => s.status==="visited").length;
