@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 // SUPABASE — replace YOUR_SUPABASE_ANON_KEY with your actual key
 // ═══════════════════════════════════════════════════════════════════════════════
 const SUPABASE_URL = "https://wiwftjtaclrwdxgcrffk.supabase.co";
-const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+const const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indpd2Z0anRhY2xyd2R4Z2NyZmZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MjIyNTYsImV4cCI6MjA5MDI5ODI1Nn0.EKQL7I62SCPnOPcOI__0yeFDgruPuDbu3xEl_138iZU";;
 
 // Run this SQL once in Supabase:
 // create table if not exists hunt_stops (
