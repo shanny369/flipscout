@@ -40,14 +40,17 @@ async function sbFetch(path, opts = {}) {
 
 async function geocode(address) {
   try {
-    const r = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=us`,
-      { headers: { "Accept-Language": "en", "User-Agent": "FlipScout/1.0" } }
-    );
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=us`;
+    console.log("Geocoding:", address, url);
+    const r = await fetch(url, { headers: { "Accept-Language": "en" } });
     const d = await r.json();
+    console.log("Geocode result:", d);
     if (d[0]) return { lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) };
-  } catch {}
-  return null;
+    return null;
+  } catch(e) {
+    console.error("Geocode error:", e);
+    return null;
+  }
 }
 
 function getTodayKey() { return new Date().toISOString().slice(0, 10); }
