@@ -905,8 +905,8 @@ export default function App() {
                               </div>
                             </div>
                             <div className="reorder-btns" onClick={e => e.stopPropagation()}>
-                              <button className="reorder-btn" onClick={() => moveStop(idx, -1)} disabled={idx===0}>↑</button>
-                              <button className="reorder-btn" onClick={() => moveStop(idx, 1)} disabled={idx===stops.length-1}>↓</button>
+                              <button className="reorder-btn" onClick={() => moveStop(realIdx, -1)} disabled={realIdx===0}>↑</button>
+                              <button className="reorder-btn" onClick={() => moveStop(realIdx, 1)} disabled={realIdx===stops.length-1}>↓</button>
                             </div>
                             <span className={`stop-chevron ${isOpen?"open":""}`}>›</span>
                           </div>
