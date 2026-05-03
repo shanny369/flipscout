@@ -294,7 +294,7 @@ const STYLES = `
   .etxt{font-size:13px;line-height:1.6}
 
   /* MAP */
-  .mapouter{flex:1;position:relative;overflow:hidden;min-height:0;display:flex;flex-direction:column}
+  .mapouter{flex:1;position:relative;overflow:hidden;min-height:0;display:flex;flex-direction:column;padding-bottom:100px}
   .mapinner{flex:1;min-height:0}
   .maplegend{position:absolute;top:10px;left:10px;z-index:100;background:rgba(10,10,14,0.92);border:1px solid #2a2a3a;border-radius:9px;padding:7px 11px;backdrop-filter:blur(10px);display:flex;flex-direction:column;gap:4px}
   .legrow{display:flex;align-items:center;gap:6px;font-family:'DM Mono',monospace;font-size:10px;color:rgba(255,255,255,0.6)}
@@ -307,7 +307,7 @@ const STYLES = `
   @keyframes gp{0%,100%{opacity:1}50%{opacity:0.3}}
 
   /* BOTTOM STRIP — always visible */
-  .mapstrip{position:absolute;bottom:0;left:0;right:0;z-index:200;background:rgba(10,10,14,0.97);border-top:1px solid #2a2a3a;padding:9px 10px 16px;backdrop-filter:blur(12px)}
+  .mapstrip{position:fixed;bottom:0;left:0;right:0;z-index:9999;background:rgba(10,10,14,0.99);border-top:1px solid #2a2a3a;padding:9px 10px 20px;backdrop-filter:blur(12px);max-width:520px}
   .stripinner{display:flex;align-items:center;gap:10px}
   .markbtn{width:60px;height:60px;border-radius:50%;background:var(--accent);border:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;box-shadow:0 4px 20px rgba(245,158,11,0.5);transition:transform 0.1s;flex-shrink:0}
   .markbtn:active{transform:scale(0.92)}
